@@ -12,8 +12,8 @@ from keras import backend as K
 from keras.models import Model, load_model
 from keras.layers.convolutional import Convolution1D
 from keras.layers.merge import concatenate, dot
-from keras_tqdm import TQDMNotebookCallback
-from keras_tqdm import TQDMCallback
+# from keras_tqdm import TQDMNotebookCallback
+# from keras_tqdm import TQDMCallback
 from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
@@ -132,7 +132,8 @@ class EMB_LSTM_VAE():
         def sampling(args):
             z_mean_, z_log_var_ = args
             batch_size = K.shape(z_mean_)[0]
-            epsilon = K.random_normal(shape=(batch_size, latent_rep_size), mean=0., stddev=epsilon_std)
+            latent_dim = K.sahep(z_mean_)[1]
+            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=epsilon_std)
             return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
 
         z_mean = Dense(latent_rep_size, name='z_mean', activation='linear')(h)
@@ -156,6 +157,88 @@ class EMB_LSTM_VAE():
         return decoded
 
 
+class VAE_BPE():
+
+    def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, max_len=10, emb=None, emb_dim=200, activation="relu"):
+
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        self.nb_words = nb_words
+        self.activation = activation
+        self.emb_dim = emb_dim
+        self.max_len = max_len
+
+        x = Input(shape=(self.max_len,))
+        
+        embed_layer = Embedding(self.nb_words, self.emb_dim, input_length=self.max_len) if emb == None else emb
+
+
+        emb_x = embed_layer(x)
+
+        vae_loss, encoded = self.build_encoder(emb_x)
+        self.encoder = Model(x, encoded)
+
+        encoded_input = Input(shape=(self.latent_dim,))
+
+        decoded = self.build_decoder(encoded_input)
+        self.decoder = Model(encoded_input, decoded)
+
+        self.model = Model(x, self.build_decoder(encoded))
+
+        self.model.compile(optimizer='Adam',
+                                 loss=vae_loss)
+        
+    def build_encoder(self, z):
+        
+        z = LSTM(self.hidden_dim, name='lstm_1')(z)
+
+        def sampling(args):
+            z_mean_, z_log_var_ = args
+            batch_size = K.shape(z_mean_)[0]
+            latent_dim = K.shape(z_mean_)[1]
+            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1)
+            return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
+
+        z_mean = Dense(self.latent_dim, name='z_mean', activation='linear')(z)
+        z_log_var = Dense(self.latent_dim, name='z_log_var', activation='linear')(z)
+
+        def vae_loss(x, x_decoded_mean):
+            x = K.flatten(x)
+            x_decoded_mean = K.flatten(x_decoded_mean)
+            xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+            return xent_loss + kl_loss
+
+        return (vae_loss, Lambda(sampling, output_shape=(self.latent_dim,), name='lambda')([z_mean, z_log_var]))
+    
+    def build_decoder(self, encoded):
+        repeated_context = RepeatVector(self.max_len)(encoded)
+        h = LSTM(self.hidden_dim, return_sequences=True, name='dec_lstm_1')(repeated_context)
+        decoded = TimeDistributed(Dense(self.nb_words, activation='softmax'), name='decoded_mean')(h)
+
+        return decoded
+    
+    def get_name(self):
+        return "vae_bpe_h%d_l%d_w%d_%s_ml%d" % (self.hidden_dim, self.latent_dim, self.nb_words, self.activation, self.max_len)
+
+
+    def batch_generator(self, reader, train_data, sp, bpe, batch_size):
+        while True:
+            for df in reader:
+                
+                x = []
+                for text in df.q.tolist():
+                    x.append([bpe.index2word.index(t) if t in bpe.index2word else bpe.index2word.index('<unk>') for t in sp.EncodeAsPieces(text)])
+                
+                x = pad_sequences(x, maxlen=self.max_len)
+                x_one_hot = to_categorical(x, self.nb_words)
+                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+                
+                
+                yield x, x_one_hot
+                
+
+
 class VAE_DSSM():
 
     def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, activation="relu"):
@@ -167,7 +250,6 @@ class VAE_DSSM():
 
 
         x = Input(shape=(self.nb_words,))
-        
         enc_dense = Dense(self.hidden_dim, activation=self.activation)
 
         emb_x = enc_dense(x)
@@ -210,6 +292,7 @@ class VAE_DSSM():
     def build_decoder(self, encoded):
 
         h = Dense(self.hidden_dim, activation=self.activation)(encoded)
+#       output is 2D one-hot vector, sigmoid is appropirate
         decoded = Dense(self.nb_words, activation='sigmoid', name='decoded_mean')(h)
         
         return decoded
@@ -222,91 +305,10 @@ class VAE_DSSM():
         while True:
             for df in reader:
                 q = df.q.tolist()
-                if train_data == "1M_EN_QQ_log":
-                    d = [i.split("<sep>")[0] for i in df.d.tolist()]
-                else:
-                    d = df.d.tolist()
-                
-                q = pad_sequences(tokeniser.texts_to_sequences(q), maxlen=max_len)
-                
-                q_one_hot = np.zeros((batch_size, nb_words))
-                for i in range(len(q)):
-                    q_one_hot[i][q[i]] = 1
-                    
-                
-                yield q_one_hot, q_one_hot
-
-
-
-class VAE_DSSM():
-
-    def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, activation="relu"):
-
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
-        self.nb_words = nb_words
-        self.activation = activation
-
-
-        x = Input(shape=(self.nb_words,))
-        enc_dense = Dense(self.hidden_dim, activation=self.activation)
-
-        emb_x = enc_dense(x)
-
-        vae_loss, encoded = self.build_encoder(emb_x)
-        self.encoder = Model(x, encoded)
-
-        encoded_input = Input(shape=(self.latent_dim,))
-
-        decoded = self.build_decoder(encoded_input)
-        self.decoder = Model(encoded_input, decoded)
-
-        self.model = Model(x, self.build_decoder(encoded))
-
-        self.model.compile(optimizer='Adam',
-                                 loss=vae_loss)
-        
-    def build_encoder(self, z):
-
-
-        def sampling(args):
-            z_mean_, z_log_var_ = args
-            batch_size = K.shape(z_mean_)[0]
-            latent_dim = K.shape(z_mean_)[1]
-            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1)
-            return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
-
-        z_mean = Dense(self.latent_dim, name='z_mean', activation='linear')(z)
-        z_log_var = Dense(self.latent_dim, name='z_log_var', activation='linear')(z)
-
-        def vae_loss(x, x_decoded_mean):
-            x = K.flatten(x)
-            x_decoded_mean = K.flatten(x_decoded_mean)
-            xent_loss = objectives.binary_crossentropy(x, x_decoded_mean)
-            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
-            return xent_loss + kl_loss
-
-        return (vae_loss, Lambda(sampling, output_shape=(self.latent_dim,), name='lambda')([z_mean, z_log_var]))
-    
-    def build_decoder(self, encoded):
-
-        h = Dense(self.hidden_dim, activation=self.activation)(encoded)
-        decoded = Dense(self.nb_words, activation='sigmoid', name='decoded_mean')(h)
-        
-        return decoded
-
-    def get_name(self):
-        return "vae_dssm_h%d_l%d_w%d_%s" % (self.hidden_dim, self.latent_dim, self.nb_words, self.activation)
-
-
-    def batch_generator(self, reader, train_data, tokeniser, batch_size, max_len, nb_words):
-        while True:
-            for df in reader:
-                q = df.q.tolist()
-                if train_data == "1M_EN_QQ_log":
-                    d = [i.split("<sep>")[0] for i in df.d.tolist()]
-                else:
-                    d = df.d.tolist()
+#                 if train_data == "1M_EN_QQ_log":
+#                     d = [i.split("<sep>")[0] for i in df.d.tolist()]
+#                 else:
+#                     d = df.d.tolist()
                 
                 q = pad_sequences(tokeniser.texts_to_sequences(q), maxlen=max_len)
                 
