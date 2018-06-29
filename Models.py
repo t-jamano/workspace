@@ -3,13 +3,16 @@ config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = tf.Session(config=config)
 
+from Utils import *
+
 from keras.layers import Bidirectional, Dense, Embedding, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout
 from keras.layers.advanced_activations import ELU
 from keras.callbacks import ModelCheckpoint
-from keras.optimizers import Adam, SGD, RMSprop
+from keras.optimizers import Adam, SGD, RMSprop, Adadelta
 from keras import objectives
 from keras import backend as K
 from keras.models import Model, load_model
+from keras.engine import Layer
 from keras.layers.convolutional import Convolution1D
 from keras.layers.merge import concatenate, dot
 # from keras_tqdm import TQDMNotebookCallback
@@ -19,7 +22,319 @@ from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 from keras.preprocessing.text import Tokenizer
 import numpy as np
+from keras import initializers
 from gensim.models import KeyedVectors
+from gensim.models import KeyedVectors
+import sentencepiece as spm
+
+
+class KCompetitive(Layer):
+    '''Applies K-Competitive layer.
+
+    # Arguments
+    '''
+    def __init__(self, topk, ctype, **kwargs):
+        self.topk = topk
+        self.ctype = ctype
+        self.uses_learning_phase = True
+        self.supports_masking = True
+        super(KCompetitive, self).__init__(**kwargs)
+
+    def call(self, x):
+        if self.ctype == 'ksparse':
+            return K.in_train_phase(self.kSparse(x, self.topk), x)
+        elif self.ctype == 'kcomp':
+            return K.in_train_phase(self.k_comp_tanh(x, self.topk), x)
+        else:
+            warnings.warn("Unknown ctype, using no competition.")
+            return x
+
+    def get_config(self):
+        config = {'topk': self.topk, 'ctype': self.ctype}
+        base_config = super(KCompetitive, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+    def k_comp_tanh(self, x, topk, factor=6.26):
+        dim = int(x.get_shape()[1])
+        # batch_size = tf.to_float(tf.shape(x)[0])
+        if topk > dim:
+            warnings.warn('Warning: topk should not be larger than dim: %s, found: %s, using %s' % (dim, topk, dim))
+            topk = dim
+
+        P = (x + tf.abs(x)) / 2
+        N = (x - tf.abs(x)) / 2
+
+        values, indices = tf.nn.top_k(P, int(topk / 2)) # indices will be [[0, 1], [2, 1]], values will be [[6., 2.], [5., 4.]]
+        # We need to create full indices like [[0, 0], [0, 1], [1, 2], [1, 1]]
+        my_range = tf.expand_dims(tf.range(0, tf.shape(indices)[0]), 1)  # will be [[0], [1]]
+        my_range_repeated = tf.tile(my_range, [1, int(topk / 2)])  # will be [[0, 0], [1, 1]]
+        full_indices = tf.stack([my_range_repeated, indices], axis=2) # change shapes to [N, k, 1] and [N, k, 1], to concatenate into [N, k, 2]
+        full_indices = tf.reshape(full_indices, [-1, 2])
+        P_reset = tf.sparse_to_dense(full_indices, tf.shape(x), tf.reshape(values, [-1]), default_value=0., validate_indices=False)
+
+
+        values2, indices2 = tf.nn.top_k(-N, topk - int(topk / 2))
+        my_range = tf.expand_dims(tf.range(0, tf.shape(indices2)[0]), 1)
+        my_range_repeated = tf.tile(my_range, [1, topk - int(topk / 2)])
+        full_indices2 = tf.stack([my_range_repeated, indices2], axis=2)
+        full_indices2 = tf.reshape(full_indices2, [-1, 2])
+        N_reset = tf.sparse_to_dense(full_indices2, tf.shape(x), tf.reshape(values2, [-1]), default_value=0., validate_indices=False)
+
+
+        P_tmp = factor * tf.reduce_sum(P - P_reset, 1, keep_dims=True) # 6.26
+        N_tmp = factor * tf.reduce_sum(-N - N_reset, 1, keep_dims=True)
+        P_reset = tf.sparse_to_dense(full_indices, tf.shape(x), tf.reshape(tf.add(values, P_tmp), [-1]), default_value=0., validate_indices=False)
+        N_reset = tf.sparse_to_dense(full_indices2, tf.shape(x), tf.reshape(tf.add(values2, N_tmp), [-1]), default_value=0., validate_indices=False)
+
+        res = P_reset - N_reset
+
+        return res
+
+    def kSparse(self, x, topk):
+        dim = int(x.get_shape()[1])
+        if topk > dim:
+            warnings.warn('Warning: topk should not be larger than dim: %s, found: %s, using %s' % (dim, topk, dim))
+            topk = dim
+
+        k = dim - topk
+        values, indices = tf.nn.top_k(-x, k) # indices will be [[0, 1], [2, 1]], values will be [[6., 2.], [5., 4.]]
+
+        # We need to create full indices like [[0, 0], [0, 1], [1, 2], [1, 1]]
+        my_range = tf.expand_dims(tf.range(0, tf.shape(indices)[0]), 1)  # will be [[0], [1]]
+        my_range_repeated = tf.tile(my_range, [1, k])  # will be [[0, 0], [1, 1]]
+
+        full_indices = tf.stack([my_range_repeated, indices], axis=2) # change shapes to [N, k, 1] and [N, k, 1], to concatenate into [N, k, 2]
+        full_indices = tf.reshape(full_indices, [-1, 2])
+
+        to_reset = tf.sparse_to_dense(full_indices, tf.shape(x), tf.reshape(values, [-1]), default_value=0., validate_indices=False)
+
+        res = tf.add(x, to_reset)
+
+        return res
+
+class Dense_tied(Dense):
+    """
+    A fully connected layer with tied weights.
+    """
+    def __init__(self, units,
+                 activation=None, use_bias=True,
+                 bias_initializer='zeros',
+                 kernel_regularizer=None, bias_regularizer=None,
+                 activity_regularizer=None,
+                 kernel_constraint=None, bias_constraint=None,
+                 tied_to=None, **kwargs):
+        self.tied_to = tied_to
+
+        super(Dense_tied, self).__init__(units=units,
+                 activation=activation, use_bias=use_bias,
+                 bias_initializer=bias_initializer,
+                 kernel_regularizer=kernel_regularizer, bias_regularizer=bias_regularizer,
+                 activity_regularizer=activity_regularizer,
+                 kernel_constraint=kernel_constraint, bias_constraint=bias_constraint,
+                 **kwargs)
+
+    def build(self, input_shape):
+        super(Dense_tied, self).build(input_shape)  # be sure you call this somewhere!
+        if self.kernel in self.trainable_weights:
+            self.trainable_weights.remove(self.kernel)
+
+
+    def call(self, x, mask=None):
+        # Use tied weights
+        self.kernel = K.transpose(self.tied_to.kernel)
+        output = K.dot(x, self.kernel)
+        if self.use_bias:
+            output += self.bias
+        return self.activation(output)
+
+# BPE version
+class VarAutoEncoder2(object):
+    """VarAutoEncoder for topic modeling.
+
+        Parameters
+        ----------
+        dim : dimensionality of encoding space.
+
+        nb_epoch :
+
+        """
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.save_model = save_model
+
+        self.nb_words = nb_words
+        self.max_len = max_len
+
+        act = 'tanh'
+        input_layer = Input(shape=(self.max_len,))
+        embed_layer = emb
+        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+
+
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        
+        h1 = embed_layer(input_layer)
+        h1 = bilstm(h1)
+        h1 = hidden_layer1(h1)
+
+        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+
+        if self.comp_topk != None:
+            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
+
+        # note that "output_shape" isn't necessary with the TensorFlow backend
+        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.nb_words, activation='softmax')
+
+        h_decoded = decoder_h(encoded)
+        h_decoded = RepeatVector(self.max_len)(h_decoded)
+        h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
+        x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
+
+        
+        self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
+        # build a model to project inputs on the latent space
+        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
+        # build a digit generator that can sample from the learned distribution
+        # decoder_input = Input(shape=(self.dim[1],))
+        # _h_decoded = decoder_h(decoder_input)
+        # _x_decoded_mean = decoder_mean(_h_decoded)
+        # self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
+        optimizer = Adadelta(lr=2.)
+        self.model.compile(optimizer=optimizer, loss=self.vae_loss)
+
+
+    def vae_loss(self, x, x_decoded_mean):
+        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+
+        return xent_loss + kl_loss
+
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+                
+                x = []
+                for text in df.q.tolist():
+                    x.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+                
+                x = pad_sequences(x, maxlen=self.max_len)
+                x_one_hot = to_categorical(x, self.nb_words)
+                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+
+                yield x, x_one_hot
+
+
+class VarAutoEncoder(object):
+    """VarAutoEncoder for topic modeling.
+
+        Parameters
+        ----------
+        dim : dimensionality of encoding space.
+
+        nb_epoch :
+
+        """
+
+    def __init__(self, input_size, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
+        self.input_size = input_size
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.save_model = save_model
+
+        self.nb_words = input_size
+
+        act = 'tanh'
+        input_layer = Input(shape=(self.input_size,))
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        h1 = hidden_layer1(input_layer)
+
+        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+
+        if self.comp_topk != None:
+            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
+
+        # note that "output_shape" isn't necessary with the TensorFlow backend
+        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        h_decoded = decoder_h(encoded)
+        decoder_mean = Dense_tied(self.input_size, activation='sigmoid', tied_to=hidden_layer1)
+        x_decoded_mean = decoder_mean(h_decoded)
+
+        self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
+        # build a model to project inputs on the latent space
+        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
+        # build a digit generator that can sample from the learned distribution
+        decoder_input = Input(shape=(self.dim[1],))
+        _h_decoded = decoder_h(decoder_input)
+        _x_decoded_mean = decoder_mean(_h_decoded)
+        self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
+        optimizer = Adadelta(lr=2.)
+        self.model.compile(optimizer=optimizer, loss=self.vae_loss)
+
+
+    def vae_loss(self, x, x_decoded_mean):
+        xent_loss =  K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
+        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+
+        return xent_loss + kl_loss
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+                
+                x = []
+                for text in df.q.tolist():
+                    x.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+                
+                x = np.array(x)
+                # No need for paddind, we do bow vector 
+                x_one_hot = to_2D_one_hot(x, self.nb_words)
+                                
+                yield x_one_hot, x_one_hot
 
 
 
@@ -189,8 +504,8 @@ class VAE_BPE():
                                  loss=vae_loss)
         
     def build_encoder(self, z):
-        
-        z = LSTM(self.hidden_dim, name='lstm_1')(z)
+
+        z = Bidirectional(LSTM(self.hidden_dim, name='lstm_1'))(z)
 
         def sampling(args):
             z_mean_, z_log_var_ = args
@@ -213,7 +528,7 @@ class VAE_BPE():
     
     def build_decoder(self, encoded):
         repeated_context = RepeatVector(self.max_len)(encoded)
-        h = LSTM(self.hidden_dim, return_sequences=True, name='dec_lstm_1')(repeated_context)
+        h = Bidirectional(LSTM(self.hidden_dim, return_sequences=True, name='dec_lstm_1'))(repeated_context)
         decoded = TimeDistributed(Dense(self.nb_words, activation='softmax'), name='decoded_mean')(h)
 
         return decoded
@@ -221,20 +536,22 @@ class VAE_BPE():
     def get_name(self):
         return "vae_bpe_h%d_l%d_w%d_%s_ml%d" % (self.hidden_dim, self.latent_dim, self.nb_words, self.activation, self.max_len)
 
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
 
-    def batch_generator(self, reader, train_data, sp, bpe, batch_size):
+    def batch_generator(self, reader, train_data, batch_size):
         while True:
             for df in reader:
                 
                 x = []
                 for text in df.q.tolist():
-                    x.append([bpe.index2word.index(t) if t in bpe.index2word else bpe.index2word.index('<unk>') for t in sp.EncodeAsPieces(text)])
-                
+                    x.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+
                 x = pad_sequences(x, maxlen=self.max_len)
                 x_one_hot = to_categorical(x, self.nb_words)
                 x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                
-                
+                                
                 yield x, x_one_hot
                 
 

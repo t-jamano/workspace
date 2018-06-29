@@ -72,7 +72,7 @@ def convert_2_trec(query, document, label, isQrel):
         trec[i][j] = int(k) if isQrel else float(k)
     return trec
 
-def evaluate(qrel, pred):
+def ranking_measure(qrel, pred):
 
     evaluator = pytrec_eval.RelevanceEvaluator(
         qrel, {'map', 'ndcg'})
@@ -83,14 +83,47 @@ def evaluate(qrel, pred):
 
     return ndcg_score, map_score
 
+def evaluate(run, cosine, test_set, best_auc_score, model_name):
+
+    for q, d, qrel, df, test_data in test_set:
+    
+        pred = cosine.model.predict([run.encoder.predict(q), run.encoder.predict(d)])
+        print(test_data)
+        if test_data in ["MayFlower", "JuneFlower"]:
+            pred = convert_2_trec(df.q.tolist(), df.d.tolist(), pred, False)
+            ndcg_score, map_score = ranking_measure(qrel, pred)
+            print("NDCG: %f" % ndcg_score)
+            print("MAP: %f" % map_score)
+            save_pkl(pred, '/work/data/res/%s_%s_%f_%f.pkl' % (model_name, test_data, ndcg_score, map_score))  
+            with open("/work/data/out/%s" % (model_name), "a") as myfile:
+                myfile.write("NDCG: %f\n" % ndcg_score)
+                myfile.write("MAP: %f\n" % map_score)
+
+        elif test_data in ["JulyFlower"]:
+            auc_score = auc(qrel, pred.flatten())
+            print("AUC: %f" % auc_score)
+            save_pkl(pred.flatten(), '/work/data/res/%s_%s_%f.pkl' % (model_name, test_data, auc_score))
+            with open("/work/data/out/%s" % (model_name), "a") as myfile:
+                myfile.write("AUC: %f\n" % auc_score)
+
+
+            if auc_score > best_auc_score:
+                best_auc_score = auc_score
+                run.model.save('/work/data/models/%s.h5' % model_name)
+                run.encoder.save('/work/data/models/%s.encoder.h5' % model_name)
+
+    return best_auc_score
+
+
 def get_reader(train_data, batch_size):
     train_data_dir = '/work/data/train_data/%s' % train_data
     if train_data == "30M_EN_pos_qd_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=0, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
-    elif train_data == "200log":
-        reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
+    elif train_data == "100M_query":
+        reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0], names=["q"], sep="\t", header=None, error_bad_lines=False)
+    
     return reader
 
 
@@ -131,14 +164,13 @@ def parse_texts(texts, tokeniser, max_len):
 
     return x
 
-def parse_texts_bpe(texts, sp, bpe, max_len):
+def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
 
     x = []
     for text in texts:
-        x.append([bpe.index2word.index(t) if t in bpe.index2word else bpe.index2word.index('<unk>') for t in sp.EncodeAsPieces(text)])
-    x = pad_sequences(q, maxlen=max_len)
+        x.append([bpe_dict[t] if t in bpe_dict else bpe_dict['<unk>'] for t in sp.EncodeAsPieces(text)])
     
-    return x
+    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len)
 
 def to_2D_one_hot(x, nb_words):
 
