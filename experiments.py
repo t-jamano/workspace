@@ -1,3 +1,15 @@
+
+from numpy.random import seed
+seed(1)
+from tensorflow import set_random_seed
+set_random_seed(2)
+
+
+from numpy.random import seed
+seed(1)
+from tensorflow import set_random_seed
+set_random_seed(2)
+
 from Utils import *
 from Models import *
 from BatchGenerator import *
@@ -53,8 +65,8 @@ if __name__ == '__main__':
 	out_dir = "/work/data/out/"
 
 # 950000
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 30000000, "100M_query": 30000000}
-	eval_every_step = 500
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 30000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
+	eval_every_step = 1000
 
 
 	# LETTER_GRAM_SIZE = 3 # See section 3.2.
@@ -116,7 +128,17 @@ if __name__ == '__main__':
 		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
 		run.initModel(sp, bpe_dict)
 	elif model == "kate3_bpe":
-		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=False), [hidden_dim, latent_dim], 2, "kcomp")
+		run = VarAutoEncoder3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=False), [hidden_dim, latent_dim], 2, "kcomp")
+		run.initModel(sp, bpe_dict)
+
+	elif model == "kate1_qd":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2)
+		run.initModel(sp, bpe_dict)
+	elif model == "kate2_qd":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
+		run.initModel(sp, bpe_dict)
+	elif model == "kate3_qd":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=False), [hidden_dim, latent_dim], 2, "kcomp")
 		run.initModel(sp, bpe_dict)
 
 
@@ -131,7 +153,7 @@ if __name__ == '__main__':
 	df_june, qrel_june = get_test_data("JuneFlower")
 	df_july, qrel_july = get_test_data("JulyFlower")
 
-	if model in ["dssm", "vae_dssm", "vae_bpe", "kate1", "kate2", "kate1_bpe", "kate2_bpe", "kate3_bpe"]:
+	if model in ["dssm", "vae_dssm", "vae_bpe", "kate1", "kate2", "kate1_bpe", "kate2_bpe", "kate3_bpe", "kate1_qd", "kate2_qd", "kate3_qd"]:
 		# Requres 2D inputs
 		#  these two condition can be minimised
 		if "BPE" in tokenise_name:
@@ -200,10 +222,13 @@ if __name__ == '__main__':
 		
 		for iteration in range(int(iterations / eval_every_step)):
 
-			run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
-			print("----------------%s--Epoch: %d Iteration: %d ---------------------" % (model, epoch, iteration*eval_every_step))
-			best_auc_score = evaluate(run, cosine, test_set, best_auc_score, model_name)
-
+			try:
+				run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
+				print("----------------%s--Epoch: %d Iteration: %d ---------------------" % (model, epoch, iteration*eval_every_step))
+				best_auc_score = evaluate(run, cosine, test_set, best_auc_score, model_name)
+			except Exception:
+				print("Found error")
+				pass
 	print("Finall Evalutation")
 	best_auc_score = evaluate(run, cosine, test_set, best_auc_score, model_name)
 

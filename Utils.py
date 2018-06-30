@@ -1,7 +1,9 @@
+from keras import backend as K
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = tf.Session(config=config)
+K.set_session(session)
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -117,13 +119,12 @@ def evaluate(run, cosine, test_set, best_auc_score, model_name):
 
 def get_reader(train_data, batch_size):
     train_data_dir = '/work/data/train_data/%s' % train_data
-    if train_data == "30M_EN_pos_qd_log":
+    if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt"]:
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=0, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "100M_query":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0], names=["q"], sep="\t", header=None, error_bad_lines=False)
-    
     return reader
 
 
@@ -171,6 +172,22 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
         x.append([bpe_dict[t] if t in bpe_dict else bpe_dict['<unk>'] for t in sp.EncodeAsPieces(text)])
     
     return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len)
+
+def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
+
+    x = []
+    for text in texts:
+        tmp = []
+        for t in sp.EncodeAsPieces(text):
+            t = str(t, "utf-8")
+            if t in bpe_dict:
+                tmp.append(bpe_dict[t])
+            else:
+                tmp.append(bpe_dict['<unk>'])
+        x.append(tmp)
+    
+    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len)
+
 
 def to_2D_one_hot(x, nb_words):
 

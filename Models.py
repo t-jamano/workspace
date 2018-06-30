@@ -1,7 +1,10 @@
+from keras import backend as K
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = tf.Session(config=config)
+K.set_session(session)
+
 
 from Utils import *
 
@@ -147,6 +150,253 @@ class Dense_tied(Dense):
         if self.use_bias:
             output += self.bias
         return self.activation(output)
+
+# BPE version
+class VarAutoEncoderQD(object):
+    """VarAutoEncoder for topic modeling.
+
+        Parameters
+        ----------
+        dim : dimensionality of encoding space.
+
+        nb_epoch :
+
+        """
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.save_model = save_model
+
+        self.nb_words = nb_words
+        self.max_len = max_len
+
+        act = 'tanh'
+        
+        q_input_layer = Input(shape=(self.max_len,))
+        d_input_layer = Input(shape=(self.max_len,))
+
+        
+        embed_layer = emb
+        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+
+
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        
+        q = embed_layer(q_input_layer)
+        q = bilstm(q)
+        q = hidden_layer1(q)
+        
+        d = embed_layer(d_input_layer)
+        d = bilstm(d)
+        d = hidden_layer1(d)
+        
+        dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
+        dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
+
+        self.q_mean = dense_mean(q)
+        self.q_log_var = dense_var(q)
+        
+        self.d_mean = dense_mean(d)
+        self.d_log_var = dense_var(d)
+
+        if self.comp_topk != None:
+            kc_layer = KCompetitive(self.comp_topk, self.ctype)
+            self.q_mean = kc_layer(self.q_mean)
+            self.d_mean = kc_layer(self.d_mean)
+
+        # note that "output_shape" isn't necessary with the TensorFlow backend
+        encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
+        encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
+        
+        cos_qd = Flatten()(merge([encoded_q, encoded_d], mode="cos"))
+        
+        
+
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.nb_words, activation='softmax')
+        
+        decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
+
+        q_decoded = decoder_h(encoded_q)
+        q_decoded = RepeatVector(self.max_len)(q_decoded)
+        q_decoded = decoder_bilstm(q_decoded)
+        
+        d_decoded = decoder_h(encoded_d)
+        d_decoded = RepeatVector(self.max_len)(d_decoded)
+        d_decoded = decoder_bilstm(d_decoded)
+        
+        q_decoded_mean = TimeDistributed(decoder_mean, name='decoded_meanq')(q_decoded)
+        d_decoded_mean = TimeDistributed(decoder_mean, name='decoded_meand')(d_decoded)
+
+        
+        self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
+        # build a model to project inputs on the latent space
+        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
+
+        optimizer = Adadelta(lr=2.)
+        self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'])
+
+
+    def vae_loss_q(self, x, x_decoded_mean):
+        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
+#         kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
+        return xent_loss + kl_loss
+    
+    def vae_loss_d(self, x, x_decoded_mean):
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+#         kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
+        kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
+        return xent_loss + kl_loss
+
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+                
+                q = []
+                for text in df.q.tolist():
+                    q.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+                
+                q = pad_sequences(q, maxlen=self.max_len)
+                q_one_hot = to_categorical(q, self.nb_words)
+                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+                
+                d = []
+                for text in df.d.tolist():
+                    d.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+                
+                d = pad_sequences(d, maxlen=self.max_len)
+                d_one_hot = to_categorical(d, self.nb_words)
+                d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+
+                yield [q,d], [q_one_hot, d_one_hot, df.label.values]
+
+# BPE version, no initialiser
+class VarAutoEncoder3(object):
+    """VarAutoEncoder for topic modeling.
+
+        Parameters
+        ----------
+        dim : dimensionality of encoding space.
+
+        nb_epoch :
+
+        """
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.save_model = save_model
+
+        self.nb_words = nb_words
+        self.max_len = max_len
+
+        act = 'tanh'
+        input_layer = Input(shape=(self.max_len,))
+        embed_layer = emb
+        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+
+
+        hidden_layer1 = Dense(self.dim[0], activation=act)
+        
+        h1 = embed_layer(input_layer)
+        h1 = bilstm(h1)
+        h1 = hidden_layer1(h1)
+
+        self.z_mean = Dense(self.dim[1])(h1)
+        self.z_log_var = Dense(self.dim[1])(h1)
+
+        if self.comp_topk != None:
+            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
+
+        # note that "output_shape" isn't necessary with the TensorFlow backend
+        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], activation=act)
+        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.nb_words, activation='softmax')
+
+        h_decoded = decoder_h(encoded)
+        h_decoded = RepeatVector(self.max_len)(h_decoded)
+        h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
+        x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
+
+        
+        self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
+        # build a model to project inputs on the latent space
+        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
+        # build a digit generator that can sample from the learned distribution
+        # decoder_input = Input(shape=(self.dim[1],))
+        # _h_decoded = decoder_h(decoder_input)
+        # _x_decoded_mean = decoder_mean(_h_decoded)
+        # self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
+        optimizer = Adadelta()
+        self.model.compile(optimizer=optimizer, loss=self.vae_loss)
+
+
+    def vae_loss(self, x, x_decoded_mean):
+        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+
+        return xent_loss + kl_loss
+
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+                
+                x = []
+                for text in df.q.tolist():
+                    x.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
+                
+                x = pad_sequences(x, maxlen=self.max_len)
+                x_one_hot = to_categorical(x, self.nb_words)
+                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+
+                yield x, x_one_hot
+
+
 
 # BPE version
 class VarAutoEncoder2(object):
@@ -350,12 +600,12 @@ class CosineSim():
 
 
 class LSTM_Model():
-    def __init__(self, max_len=10, emb_dim=100, nb_words=50000):
+    def __init__(self, max_len=10, emb_dim=100, nb_words=50000, emb=None):
 
         q_input = Input(shape=(max_len,))
         d_input = Input(shape=(max_len,))
         
-        emb = Embedding(nb_words, emb_dim, mask_zero=True)
+        emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
 
         lstm = LSTM(256)
 
@@ -365,6 +615,8 @@ class LSTM_Model():
         concat = Concatenate()([self.q_embed, self.d_embed])
 
         pred = Dense(1, activation='sigmoid')(concat)
+
+        self.encoder = Model(inputs=q_input, outputs=self.q_embed)
 
         self.model = Model(inputs=[q_input, d_input], outputs=pred)
         self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
