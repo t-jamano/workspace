@@ -169,17 +169,10 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
 
     x = []
     for text in texts:
-        x.append([bpe_dict[t] if t in bpe_dict else bpe_dict['<unk>'] for t in sp.EncodeAsPieces(text)])
-    
-    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len)
-
-def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
-
-    x = []
-    for text in texts:
         tmp = []
         for t in sp.EncodeAsPieces(text):
-            t = str(t, "utf-8")
+            if not isinstance(t, str):
+                t = str(t, "utf-8")
             if t in bpe_dict:
                 tmp.append(bpe_dict[t])
             else:

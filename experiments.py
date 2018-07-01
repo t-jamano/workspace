@@ -13,12 +13,13 @@ set_random_seed(2)
 from Utils import *
 from Models import *
 from BatchGenerator import *
+import datetime
 
 #################### Arguments ####################
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Query Similarity Experiments")
 
-    parser.add_argument('--dataset', type=str, help='Choose a dataset. (30M_EN_pos_qd_log, 1M_EN_QQ_log2)')
+    parser.add_argument('--dataset', type=str, help='Choose a dataset. (30M_EN_pos_qd_log, 1M_EN_QQ_log)')
 
     parser.add_argument('--model', type=str,
                         help='Model Name: dssm, vae_dssm')
@@ -49,8 +50,13 @@ def parse_args():
 
 if __name__ == '__main__':
 
+
+
+
 	args = parse_args()
 	print(args)
+
+	time = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
 
 
 	model = args.model
@@ -65,8 +71,9 @@ if __name__ == '__main__':
 	out_dir = "/work/data/out/"
 
 # 950000
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 30000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
-	eval_every_step = 1000
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
+	# eval_every_step = 1000
+	eval_every_step = 10
 
 
 	# LETTER_GRAM_SIZE = 3 # See section 3.2.
@@ -107,7 +114,11 @@ if __name__ == '__main__':
 	# =================================== Initiate Model ==============================================
 
 	if model == "dssm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True))
+		run.initModel(sp, bpe_dict)
+	elif model == "bilstm":
+		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=bpe.get_keras_embedding(True))
+		run.initModel(sp, bpe_dict)
 	elif model == "vae_dssm":
 		run = VAE_DSSM(hidden_dim, latent_dim, nb_words)	
 	elif model == "vae_bpe":
@@ -140,9 +151,31 @@ if __name__ == '__main__':
 	elif model == "kate3_qd":
 		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=False), [hidden_dim, latent_dim], 2, "kcomp")
 		run.initModel(sp, bpe_dict)
+	elif model == "kate2_qdc":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableCross=True)
+		run.initModel(sp, bpe_dict)
+	elif model == "kate2_qdm":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableMemory=True)
+		run.initModel(sp, bpe_dict)
+	elif model == "kate2_qdg":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
+		run.initModel(sp, bpe_dict)
+		run.encoder._make_predict_function()
+
+		graph = tf.get_default_graph()
+
+	elif model == "kate2_qda":
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", useAll=True)
+		run.initModel(sp, bpe_dict)
+		# self.encoder._make_predict_function()
+		# self.encoder.compile(optimizer=optimizer, loss="binary_crossentropy")
+
+		# run.model._make_predict_function()
+		# run.encoder._make_predict_function()
+		# run.discriminator._make_predict_function()
 
 
-	model_name = "%s_h%d_l%d_n%d_ml%d_w%d_b%d_%s_%s" % (model, hidden_dim, latent_dim, num_negatives, max_len, nb_words, batch_size, tokenise_name, train_data)
+	model_name = "%s_h%d_l%d_n%d_ml%d_w%d_b%d_%s_%s_%s" % (model, hidden_dim, latent_dim, num_negatives, max_len, nb_words, batch_size, tokenise_name, train_data, time)
 
 	
 
@@ -153,7 +186,7 @@ if __name__ == '__main__':
 	df_june, qrel_june = get_test_data("JuneFlower")
 	df_july, qrel_july = get_test_data("JulyFlower")
 
-	if model in ["dssm", "vae_dssm", "vae_bpe", "kate1", "kate2", "kate1_bpe", "kate2_bpe", "kate3_bpe", "kate1_qd", "kate2_qd", "kate3_qd"]:
+	if model in ["dssm", "bilstm", "vae_dssm", "vae_bpe", "kate1", "kate2", "kate1_bpe", "kate2_bpe", "kate3_bpe", "kate1_qd", "kate2_qd", "kate3_qd", "kate2_qdc", "kate2_qdm", "kate2_qdg", "kate2_qda"]:
 		# Requres 2D inputs
 		#  these two condition can be minimised
 		if "BPE" in tokenise_name:
@@ -218,16 +251,23 @@ if __name__ == '__main__':
 		print("------------------Epoch %d---------------------" % epoch)
 		# restart the reader thread
 		reader = get_reader(train_data, batch_size)
+		reader2 = get_reader(train_data, batch_size)
 
 		
 		for iteration in range(int(iterations / eval_every_step)):
+			run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
 
 			try:
-				run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
+				if model in ["kate2_qdg"]:
+					run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
+					# run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
+				else:
+					run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=1)       
 				print("----------------%s--Epoch: %d Iteration: %d ---------------------" % (model, epoch, iteration*eval_every_step))
 				best_auc_score = evaluate(run, cosine, test_set, best_auc_score, model_name)
-			except Exception:
+			except Exception as e:
 				print("Found error")
+				print(e)
 				pass
 	print("Finall Evalutation")
 	best_auc_score = evaluate(run, cosine, test_set, best_auc_score, model_name)
