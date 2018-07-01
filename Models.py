@@ -395,6 +395,7 @@ class VarAutoEncoderQD(object):
                     y_ = np.concatenate([ones, zeros, ones, zeros])
 
                     idx = np.random.randint(batch_size * 4, size=batch_size * 4)
+                    
                 yield x_[idx], y_[idx]
 
 # BPE version, no initialiser
