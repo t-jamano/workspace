@@ -85,36 +85,38 @@ def ranking_measure(qrel, pred):
 
     return ndcg_score, map_score
 
-def evaluate(run, cosine, test_set, best_auc_score, model_name):
-
+def evaluate(run, cosine, test_set, model_name):
+    may_ndcg, june_ndcg, july_auc = 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
         pred = cosine.model.predict([run.encoder.predict(q), run.encoder.predict(d)])
-        print(test_data)
+        
         if test_data in ["MayFlower", "JuneFlower"]:
             pred = convert_2_trec(df.q.tolist(), df.d.tolist(), pred, False)
             ndcg_score, map_score = ranking_measure(qrel, pred)
-            print("NDCG: %f" % ndcg_score)
-            print("MAP: %f" % map_score)
-            save_pkl(pred, '/work/data/res/%s_%s_%f_%f.pkl' % (model_name, test_data, ndcg_score, map_score))  
-            with open("/work/data/out/%s" % (model_name), "a") as myfile:
-                myfile.write("NDCG: %f\n" % ndcg_score)
-                myfile.write("MAP: %f\n" % map_score)
+
+            if test_data == "MayFlower":
+                may_ndcg = ndcg_score
+            elif test_data == "JuneFlower":
+                june_ndcg = ndcg_score
+            # print("NDCG: %f" % ndcg_score)
+            # print("MAP: %f" % map_score)
+            # save_pkl(pred, '/work/data/res/%s_%s_%f_%f.pkl' % (model_name, test_data, ndcg_score, map_score))  
+            # with open("/work/data/out/%s" % (model_name), "a") as myfile:
+            #     myfile.write("NDCG: %f\n" % ndcg_score)
+            #     myfile.write("MAP: %f\n" % map_score)
 
         elif test_data in ["JulyFlower"]:
-            auc_score = auc(qrel, pred.flatten())
-            print("AUC: %f" % auc_score)
-            save_pkl(pred.flatten(), '/work/data/res/%s_%s_%f.pkl' % (model_name, test_data, auc_score))
-            with open("/work/data/out/%s" % (model_name), "a") as myfile:
-                myfile.write("AUC: %f\n" % auc_score)
+            july_auc = auc(qrel, pred.flatten())
+            # print("AUC: %f" % auc_score)
+            # save_pkl(pred.flatten(), '/work/data/res/%s_%s_%f.pkl' % (model_name, test_data, auc_score))
+            # with open("/work/data/out/%s" % (model_name), "a") as myfile:
+            #     myfile.write("AUC: %f\n" % auc_score)
 
 
-            if auc_score > best_auc_score:
-                best_auc_score = auc_score
-                run.model.save('/work/data/models/%s.h5' % model_name)
-                run.encoder.save('/work/data/models/%s.encoder.h5' % model_name)
+            
 
-    return best_auc_score
+    return may_ndcg, june_ndcg, july_auc
 
 
 def get_reader(train_data, batch_size):
@@ -173,6 +175,7 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
         for t in sp.EncodeAsPieces(text):
             if not isinstance(t, str):
                 t = str(t, "utf-8")
+            t = t.lower()
             if t in bpe_dict:
                 tmp.append(bpe_dict[t])
             else:

@@ -165,7 +165,7 @@ class VarAutoEncoderQD(object):
         nb_epoch :
 
         """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, useAll=True):
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, useAll=False):
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
@@ -221,7 +221,7 @@ class VarAutoEncoderQD(object):
         encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
         encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
         
-        cos_qd = Flatten()(merge([encoded_q, encoded_d], mode="cos"))
+        cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
         
         
 
@@ -247,12 +247,12 @@ class VarAutoEncoderQD(object):
 
         
         
-        q_decoded_mean = TimeDistributed(decoder_mean, name='decoded_meanq')(q_decoded)
-        d_decoded_mean = TimeDistributed(decoder_mean, name='decoded_meand')(d_decoded)
+        q_decoded_mean = TimeDistributed(decoder_mean, name='recon_q')(q_decoded)
+        d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
 
 
-        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos"))
-        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos"))
+        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos", name="cos_q"))
+        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
 
 
         if self.enableCross:
@@ -271,12 +271,7 @@ class VarAutoEncoderQD(object):
             self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
 
 
-        # build a model to project inputs on the latent space
-        if self.useAll:
-            self.encoder = Model(outputs=encoded_q, inputs=q_input_layer)
-        else:
-            # As suggested by Keras, output of encoder is q_mean
-            self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
+        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
 
 
 
@@ -395,7 +390,7 @@ class VarAutoEncoderQD(object):
                     y_ = np.concatenate([ones, zeros, ones, zeros])
 
                     idx = np.random.randint(batch_size * 4, size=batch_size * 4)
-                    
+
                 yield x_[idx], y_[idx]
 
 # BPE version, no initialiser
