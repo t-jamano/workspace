@@ -30,6 +30,7 @@ from keras import initializers
 from gensim.models import KeyedVectors
 from gensim.models import KeyedVectors
 import sentencepiece as spm
+from copy import copy
 
 
 class KCompetitive(Layer):
@@ -152,10 +153,8 @@ class Dense_tied(Dense):
             output += self.bias
         return self.activation(output)
 
-
-
 # BPE version
-class VarAutoEncoderQD(object):
+class VarAutoEncoderQD2(object):
     """VarAutoEncoder for topic modeling.
 
         Parameters
@@ -165,7 +164,7 @@ class VarAutoEncoderQD(object):
         nb_epoch :
 
         """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, useAll=False):
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5):
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
@@ -177,7 +176,7 @@ class VarAutoEncoderQD(object):
         self.enableCross = enableCross
         self.enableMemory = enableMemory
         self.enableGAN = enableGAN
-        self.useAll = useAll
+        self.alpha = alpha
 
         act = 'tanh'
         
@@ -221,9 +220,12 @@ class VarAutoEncoderQD(object):
         encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
         encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
         
-        cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
-        
-        
+        # old
+        # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
+        # 
+        cos_qd = merge([self.q_mean, self.d_mean], mode="concat",)
+        cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
+
 
 
         # we instantiate these layers separately so as to reuse them later
@@ -278,7 +280,7 @@ class VarAutoEncoderQD(object):
 
 
 
-        optimizer = Adadelta(lr=2.)
+        optimizer = Adam()
         if self.enableCross:
             self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'])
         
@@ -291,24 +293,262 @@ class VarAutoEncoderQD(object):
             self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
 
         else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'])
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[self.alpha, self.alpha, 1.0-self.alpha])
 
         
 
     def vae_loss_q(self, x, x_decoded_mean):
-        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
         x = K.flatten(x)
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
         kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
-#         kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
         return xent_loss + kl_loss
     
     def vae_loss_d(self, x, x_decoded_mean):
         x = K.flatten(x)
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-#         kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
+        kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
+        return xent_loss + kl_loss
+
+    def vae_loss_cross(self, x, x_decoded_mean):
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        return xent_loss
+
+    def build_discriminator(self):
+
+        dis = Sequential()
+
+        dis.add(Dense(self.dim[0], input_dim=self.dim[1]))
+        dis.add(LeakyReLU(alpha=0.2))
+        dis.add(Dense(self.dim[1]))
+        dis.add(LeakyReLU(alpha=0.2))
+        dis.add(Dense(1, activation="sigmoid"))
+
+        encoded_repr = Input(shape=(self.dim[1], ))
+        validity = dis(encoded_repr)
+
+        return Model(encoded_repr, validity)
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+
+                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+                
+                q_one_hot = to_categorical(q, self.nb_words)
+                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+                
+                d_one_hot = to_categorical(d, self.nb_words)
+                d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+
+                if self.enableCross:
+                    yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
+                elif self.enableMemory or self.enableGAN:
+                    one = np.ones(batch_size)
+                    yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
+                else:
+                    yield [q,d], [q_one_hot, d_one_hot, df.label.values]
+
+    def batch_GAN_generator(self, reader, train_data, batch_size, graph):
+        while True:
+            for df in reader:
+
+                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+                d = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+
+                with graph.as_default():
+                    # shuffle(x)
+                    q_fake = self.encoder.predict(q)
+                    # q_fake = np.random.normal(size=(batch_size, self.dim[1]))
+                    q_real = np.random.normal(size=(batch_size, self.dim[1]))
+                    d_fake = self.encoder.predict(d)
+                    # d_fake = np.random.normal(size=(batch_size, self.dim[1]))
+                    d_real = np.random.normal(size=(batch_size, self.dim[1]))
+                    
+                    ones = np.ones(batch_size)
+                    zeros = np.zeros(batch_size)
+
+
+                    x_ = np.concatenate([q_real, q_fake, d_real, d_fake])
+                    y_ = np.concatenate([ones, zeros, ones, zeros])
+
+                    idx = np.random.randint(batch_size * 4, size=batch_size * 4)
+
+                yield x_[idx], y_[idx]
+
+
+
+# BPE version
+class VarAutoEncoderQD(object):
+    """VarAutoEncoder for topic modeling.
+
+        Parameters
+        ----------
+        dim : dimensionality of encoding space.
+
+        nb_epoch :
+
+        """
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5):
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.save_model = save_model
+
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.enableCross = enableCross
+        self.enableMemory = enableMemory
+        self.enableGAN = enableGAN
+        self.alpha = alpha
+
+        act = 'tanh'
+        
+        q_input_layer = Input(shape=(self.max_len,))
+        d_input_layer = Input(shape=(self.max_len,))
+
+        
+        embed_layer = emb
+        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+
+
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        
+
+        q = embed_layer(q_input_layer)
+        q = bilstm(q)
+        q = hidden_layer1(q)
+        
+        d = embed_layer(d_input_layer)
+        d = bilstm(d)
+        d = hidden_layer1(d)
+
+        self.hidden_q = q
+        self.hidden_d = d
+        
+        dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
+        dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
+
+        self.q_mean = dense_mean(q)
+        self.q_log_var = dense_var(q)
+        
+        self.d_mean = dense_mean(d)
+        self.d_log_var = dense_var(d)
+
+        if self.comp_topk != None:
+            kc_layer = KCompetitive(self.comp_topk, self.ctype)
+            self.q_mean = kc_layer(self.q_mean)
+            self.d_mean = kc_layer(self.d_mean)
+
+        # note that "output_shape" isn't necessary with the TensorFlow backend
+        encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
+        encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
+        
+        # old
+        # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
+        # 
+        cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
+        cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
+
+
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.nb_words, activation='softmax')
+        
+        decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
+
+        self.hidden_decoded_q = decoder_h(encoded_q)
+        self.hidden_decoded_d = decoder_h(encoded_d)
+
+
+        q_decoded = decoder_h(encoded_q)
+        q_decoded = RepeatVector(self.max_len)(q_decoded)
+        q_decoded = decoder_bilstm(q_decoded)
+        
+        d_decoded = decoder_h(encoded_d)
+        d_decoded = RepeatVector(self.max_len)(d_decoded)
+        d_decoded = decoder_bilstm(d_decoded)
+
+        
+        
+        q_decoded_mean = TimeDistributed(decoder_mean, name='recon_q')(q_decoded)
+        d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
+
+
+        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos", name="cos_q"))
+        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
+
+
+        if self.enableCross:
+            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
+        
+        elif self.enableMemory:
+            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_m_q, cos_m_d, cos_qd], inputs=[q_input_layer, d_input_layer])
+        
+        elif self.enableGAN:
+            self.discriminator = self.build_discriminator()
+            validity_q = self.discriminator(encoded_q)
+            validity_d = self.discriminator(encoded_d)
+            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, validity_q, validity_d, cos_qd], inputs=[q_input_layer, d_input_layer])
+    
+        else:
+            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
+
+
+        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
+
+
+
+
+
+
+        optimizer = Adam()
+        if self.enableCross:
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'])
+        
+        elif self.enableMemory:
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
+        
+        elif self.enableGAN:
+            # , loss_weights=[0.999, 0.999, 0.001, 0.001, 0.999]
+            self.discriminator.compile(loss='binary_crossentropy',optimizer=optimizer,metrics=['accuracy'])
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
+
+        else:
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[self.alpha, self.alpha, 1.0-self.alpha])
+
+        
+
+    def vae_loss_q(self, x, x_decoded_mean):
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
+        return xent_loss + kl_loss
+    
+    def vae_loss_d(self, x, x_decoded_mean):
+        x = K.flatten(x)
+        x_decoded_mean = K.flatten(x_decoded_mean)
+        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
         kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
         return xent_loss + kl_loss
 
@@ -701,6 +941,7 @@ class LSTM_Model():
 
         bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
         dense1 = Dense(hidden_dim, activation = "tanh")
+
         dense2 = Dense(latent_dim, activation = "tanh")
 
 
@@ -726,6 +967,51 @@ class LSTM_Model():
 
                 q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
                 d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+
+                yield [q,d], df.label.values
+
+class BiLSTM():
+    def __init__(self, hidden_dim=300, latent_dim=128, q_max_len=10, d_max_len=15, emb_dim=200, nb_words=50000, emb=None):
+
+        self.q_max_len = q_max_len
+        self.d_max_len = d_max_len
+        self.nb_words = nb_words
+        q_input = Input(shape=(self.q_max_len,))
+        d_input = Input(shape=(self.d_max_len,))
+        
+        q_emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
+        q_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
+        q_dense1 = Dense(hidden_dim, activation = "tanh")
+        q_dense2 = Dense(latent_dim, activation = "tanh")
+
+        d_emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
+        d_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
+        d_dense1 = Dense(hidden_dim, activation = "tanh")
+        d_dense2 = Dense(latent_dim, activation = "tanh")
+
+
+        self.q_embed = q_dense2(q_dense1(q_bilstm(q_emb(q_input))))
+        self.d_embed = d_dense2(d_dense1(d_bilstm(d_emb(d_input))))
+
+        concat = Concatenate()([self.q_embed, self.d_embed])
+
+        pred = Dense(1, activation='sigmoid')(concat)
+
+        self.encoder = Model(inputs=q_input, outputs=self.q_embed)
+
+        self.model = Model(inputs=[q_input, d_input], outputs=pred)
+        self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    def initModel(self, sp, bpe_dict):
+        self.sp = sp
+        self.bpe_dict = bpe_dict
+
+    def batch_generator(self, reader, train_data, batch_size):
+        while True:
+            for df in reader:
+
+                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.q_max_len, True)
+                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.d_max_len, True)
 
                 yield [q,d], df.label.values
 
