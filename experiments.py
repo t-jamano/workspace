@@ -259,8 +259,19 @@ if __name__ == '__main__':
 					hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					t2 = time()
 					losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history] + [ "%s = %.4f" % (k, hist_dis.history[k][-1]) for k in hist_dis.history])
+				
 				else:
 					t1 = time()
+
+					if "kate2_qd2" in model:
+						pass
+					elif "kate2_qd" in model:
+						max_pred_weight = 150
+						kl_inc = 1.0 / 5000
+						pred_inc = 0.1
+						run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
+						run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
+
 					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					t2 = time()
 					losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])

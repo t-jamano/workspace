@@ -186,18 +186,20 @@ class VarAutoEncoderQD2(object):
         
         embed_layer = emb
         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-
-
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+
+        d_embed_layer = emb
+        d_bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+        d_hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
 
         q = embed_layer(q_input_layer)
         q = bilstm(q)
         q = hidden_layer1(q)
         
-        d = embed_layer(d_input_layer)
-        d = bilstm(d)
-        d = hidden_layer1(d)
+        d = d_embed_layer(d_input_layer)
+        d = d_bilstm(d)
+        d = d_hidden_layer1(d)
 
         self.hidden_q = q
         self.hidden_d = d
@@ -223,29 +225,30 @@ class VarAutoEncoderQD2(object):
         # old
         # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
         # 
-        cos_qd = merge([self.q_mean, self.d_mean], mode="concat",)
+        cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
         cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
 
 
 
-        # we instantiate these layers separately so as to reuse them later
         decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
         decoder_mean = Dense(self.nb_words, activation='softmax')
-        
         decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
 
+        d_decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        d_decoder_mean = Dense(self.nb_words, activation='softmax')
+        d_decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
+
         self.hidden_decoded_q = decoder_h(encoded_q)
-        self.hidden_decoded_d = decoder_h(encoded_d)
+        self.hidden_decoded_d = d_decoder_h(encoded_d)
 
 
         q_decoded = decoder_h(encoded_q)
         q_decoded = RepeatVector(self.max_len)(q_decoded)
         q_decoded = decoder_bilstm(q_decoded)
         
-        d_decoded = decoder_h(encoded_d)
+        d_decoded = d_decoder_h(encoded_d)
         d_decoded = RepeatVector(self.max_len)(d_decoded)
-        d_decoded = decoder_bilstm(d_decoded)
+        d_decoded = d_decoder_bilstm(d_decoded)
 
         
         
@@ -419,6 +422,9 @@ class VarAutoEncoderQD(object):
         self.enableGAN = enableGAN
         self.alpha = alpha
 
+        self.kl_weight = 0.0
+        self.pred_weight = 0.0
+
         act = 'tanh'
         
         q_input_layer = Input(shape=(self.max_len,))
@@ -517,13 +523,9 @@ class VarAutoEncoderQD(object):
         self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
 
 
-
-
-
-
         optimizer = Adam()
         if self.enableCross:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'])
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'], loss_weights=[1, 1, 1, 1, self.pred_weight])
         
         elif self.enableMemory:
             self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
@@ -534,7 +536,7 @@ class VarAutoEncoderQD(object):
             self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
 
         else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[self.alpha, self.alpha, 1.0-self.alpha])
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
 
         
 
@@ -543,14 +545,14 @@ class VarAutoEncoderQD(object):
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
         kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
-        return xent_loss + kl_loss
+        return xent_loss + (self.kl_weight * kl_loss)
     
     def vae_loss_d(self, x, x_decoded_mean):
         x = K.flatten(x)
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
         kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
-        return xent_loss + kl_loss
+        return xent_loss + (self.kl_weight * kl_loss)
 
     def vae_loss_cross(self, x, x_decoded_mean):
         x = K.flatten(x)
