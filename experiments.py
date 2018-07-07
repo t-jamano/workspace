@@ -22,6 +22,8 @@ def parse_args():
     parser.add_argument('--neg', type=int, default=1,
                         help='Number of negative instances to pair with a positive instance.')
 
+    parser.add_argument('--path', type=str, default="/work/",
+                        help='Path to dir')
 
     # May need them later
     parser.add_argument('--e', type=int, default=1,
@@ -48,7 +50,7 @@ if __name__ == '__main__':
 
 	date_time = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
 
-
+	path = args.path
 	model = args.model
 	# dataset = args.dataset
     # 30M_EN_pos_qd_log, 1M_EN_QQ_log2
@@ -59,7 +61,7 @@ if __name__ == '__main__':
 	epochs = args.e
 	alpha = args.a
 
-	out_dir = "/work/data/out/"
+	out_dir = "%sdata/out/" % path
 
 # 950000
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
@@ -97,8 +99,8 @@ if __name__ == '__main__':
 	if "BPE" in tokenise_name:
 
 		sp = spm.SentencePieceProcessor()
-		sp.Load('/work/data/bpe/en.wiki.bpe.op50000.model')
-		bpe = KeyedVectors.load_word2vec_format("/work/data/bpe/en.wiki.bpe.op50000.d200.w2v.bin", binary=True)
+		sp.Load('%sdata/bpe/en.wiki.bpe.op50000.model' % path)
+		bpe = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
 		nb_words = len(bpe.index2word)
 
 		bpe_dict = {bpe.index2word[i]: i for i in range(len(bpe.index2word))}
@@ -107,7 +109,7 @@ if __name__ == '__main__':
 	elif "trigram" in tokenise_name:
 
 		tokeniser = L3wTransformer()
-		tokeniser = tokeniser.load("/work/data/trigram/%s" % tokenise_name)
+		tokeniser = tokeniser.load("%sdata/trigram/%s" % (path,tokenise_name))
 
 	# =================================== Initiate Model ==============================================
 
@@ -186,9 +188,9 @@ if __name__ == '__main__':
 	# =================================== Get testing data ==============================================
 
 
-	df_may, qrel_may = get_test_data("MayFlower")
-	df_june, qrel_june = get_test_data("JuneFlower")
-	df_july, qrel_july = get_test_data("JulyFlower")
+	df_may, qrel_may = get_test_data("MayFlower", path)
+	df_june, qrel_june = get_test_data("JuneFlower", patj)
+	df_july, qrel_july = get_test_data("JulyFlower", path)
 
 	enablePadding = True
 
@@ -215,8 +217,8 @@ if __name__ == '__main__':
 	iterations = int(train_data_size[train_data] / batch_size)
 	for epoch in range(epochs):		
 		# restart the reader thread
-		reader = get_reader(train_data, batch_size)
-		reader2 = get_reader(train_data, batch_size)
+		reader = get_reader(train_data, batch_size, path)
+		reader2 = get_reader(train_data, batch_size, path)
 
 		
 		for iteration in range(int(iterations / eval_every_step)):
@@ -254,15 +256,15 @@ if __name__ == '__main__':
 				file_output = '%s_a%.1f, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
 
 				print(print_output)
-				with open("/work/data/out/%s" % (model_name), "a") as myfile:
+				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
 					myfile.write(file_output)
 
 
 
 				if july_auc > best_auc_score:
 					best_auc_score = july_auc
-					run.model.save('/work/data/models/%s.h5' % model_name, overwrite=True)
-					run.encoder.save('/work/data/models/%s.encoder.h5' % model_name, overwrite=True)
+					run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
+					run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
 
 
 			except Exception as e:
@@ -273,7 +275,7 @@ if __name__ == '__main__':
 	may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
 	str_output = 'May = %.4f, June = %.4f, July = %.4f \n' % (may_ndcg, june_ndcg, july_auc)
 	print(str_output)
-	with open("/work/data/out/%s" % (model_name), "a") as myfile:
+	with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
 		myfile.write(str_output)
 
 		        	

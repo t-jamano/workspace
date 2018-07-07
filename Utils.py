@@ -120,8 +120,8 @@ def evaluate(run, cosine, test_set, model_name):
     return may_ndcg, june_ndcg, july_auc
 
 
-def get_reader(train_data, batch_size):
-    train_data_dir = '/work/data/train_data/%s' % train_data
+def get_reader(train_data, batch_size, path):
+    train_data_dir = '%sdata/train_data/%s' % (path,train_data)
     if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower2.txt"]:
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
@@ -142,10 +142,12 @@ def sent_generator(reader, tokeniser, batch_size, max_len, feature_num):
         
         yield q, q_one_hot
 
-def get_test_data(filename):
+def get_test_data(filename, path):
 
     if filename in ["MayFlower", "JuneFlower"]:
-        file_dir = '/data/t-mipha/data/query_similarity_ndcg/%sIdeal.txt' % filename
+        # if "/work/" in path:
+        # file_dir = '/data/t-mipha/data/query_similarity_ndcg/%sIdeal.txt' % filename
+        file_dir = '%sdata/test_data/%sIdeal.txt' % (path,filename)
         df = pd.read_csv(file_dir, names=["market", "qid", "q", "label", "d", "date"], sep="\t", header=0, error_bad_lines=False)
         df = df.dropna()
         y = np.array([0 if i == "Bad" else 1 if i == "Fare" else 2 for i in df.label.tolist()])
@@ -153,9 +155,9 @@ def get_test_data(filename):
         qrel = convert_2_trec(df.q.tolist(), df.d.tolist(), y, True)
 
     elif filename in ["JulyFlower"]:
-
-        file_dir = '/data/chzho/deepqts/test_data/julyflower/julyflower_original.tsv'
-        df = pd.read_csv(file_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
+        file_dir = file_dir = '%sdata/test_data/%sIdeal.txt' % (path,filename)
+        # file_dir = '/data/chzho/deepqts/test_data/julyflower/julyflower_original.tsv'
+        df = pd.read_csv(file_dir, names=["q", "d", "label"], sep="\t", header=0, error_bad_lines=False)
         df = df.dropna()
         qrel = df.label.values
 
