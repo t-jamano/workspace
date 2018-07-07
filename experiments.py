@@ -189,7 +189,7 @@ if __name__ == '__main__':
 
 
 	df_may, qrel_may = get_test_data("MayFlower", path)
-	df_june, qrel_june = get_test_data("JuneFlower", patj)
+	df_june, qrel_june = get_test_data("JuneFlower", path)
 	df_july, qrel_july = get_test_data("JulyFlower", path)
 
 	enablePadding = True
