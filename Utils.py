@@ -1,8 +1,9 @@
-from keras import backend as K
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = tf.Session(config=config)
+from keras import backend as K
+
 K.set_session(session)
 
 import warnings
@@ -25,7 +26,7 @@ import math
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
 from keras.models import model_from_json
-import sys
+import sys, re
 import argparse
 
 
@@ -121,8 +122,8 @@ def evaluate(run, cosine, test_set, model_name):
 
 def get_reader(train_data, batch_size):
     train_data_dir = '/work/data/train_data/%s' % train_data
-    if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt"]:
-        reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=0, error_bad_lines=False)
+    if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower.txt"]:
+        reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "100M_query":
@@ -145,7 +146,7 @@ def get_test_data(filename):
 
     if filename in ["MayFlower", "JuneFlower"]:
         file_dir = '/data/t-mipha/data/query_similarity_ndcg/%sIdeal.txt' % filename
-        df = pd.read_csv(file_dir, names=["market", "qid", "q", "label", "d", "date"], sep="\t", header=None, error_bad_lines=False)
+        df = pd.read_csv(file_dir, names=["market", "qid", "q", "label", "d", "date"], sep="\t", header=0, error_bad_lines=False)
         df = df.dropna()
         y = np.array([0 if i == "Bad" else 1 if i == "Fare" else 2 for i in df.label.tolist()])
 
@@ -172,10 +173,14 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
     x = []
     for text in texts:
         tmp = []
+
+        text = text.lower()
+        text = re.sub(r'\W+', ' ', text)
+        
         for t in sp.EncodeAsPieces(text):
             if not isinstance(t, str):
                 t = str(t, "utf-8")
-            t = t.lower()
+            
             if t in bpe_dict:
                 tmp.append(bpe_dict[t])
             else:
