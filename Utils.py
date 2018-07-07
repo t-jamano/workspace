@@ -122,7 +122,7 @@ def evaluate(run, cosine, test_set, model_name):
 
 def get_reader(train_data, batch_size):
     train_data_dir = '/work/data/train_data/%s' % train_data
-    if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower.txt"]:
+    if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower2.txt"]:
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
@@ -174,9 +174,10 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
     for text in texts:
         tmp = []
 
-        text = text.lower()
-        text = re.sub(r'\W+', ' ', text)
-        
+        # with 30M_QD_lower2.txt we dont need these lines
+        # text = text.lower()
+        # text = re.sub(r'\W+', ' ', text)
+
         for t in sp.EncodeAsPieces(text):
             if not isinstance(t, str):
                 t = str(t, "utf-8")

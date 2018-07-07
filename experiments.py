@@ -64,7 +64,7 @@ if __name__ == '__main__':
 # 950000
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD_lower.txt": 25000000}
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD_lower2.txt": 25000000}
 	eval_every_step = 1000
 	# eval_every_step = 10
 
@@ -89,6 +89,8 @@ if __name__ == '__main__':
 
 	optimizer=args.o
 
+	if optimizer == "adadelta":
+		optimizer = Adadelta(lr=2.)
 	
 
 	# load pre-trained tokeniser
@@ -156,6 +158,9 @@ if __name__ == '__main__':
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd2":
 		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
+		run.initModel(sp, bpe_dict)
+	elif model == "kate2_qd3":
+		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
 		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableCross=True)
@@ -228,14 +233,14 @@ if __name__ == '__main__':
 				else:
 					t1 = time()
 
-					if "kate2_qd2" in model:
-						pass
-					elif "kate2_qd" in model:
-						max_pred_weight = 150
-						kl_inc = 1.0 / 5000
-						pred_inc = 0.1
-						run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
-						run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
+					# if "kate2_qd2" in model:
+					# 	pass
+					# elif "kate2_qd" in model:
+					# 	max_pred_weight = 150
+					# 	kl_inc = 1.0 / 5000
+					# 	pred_inc = 0.1
+					# 	run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
+					# 	run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
 
 					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					t2 = time()
