@@ -177,8 +177,8 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
         tmp = []
 
         # with 30M_QD_lower2.txt we dont need these lines
-        # text = text.lower()
-        # text = re.sub(r'\W+', ' ', text)
+        text = text.lower()
+        text = re.sub(r'\W+', ' ', text)
 
         for t in sp.EncodeAsPieces(text):
             if not isinstance(t, str):

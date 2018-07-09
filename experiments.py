@@ -66,7 +66,7 @@ if __name__ == '__main__':
 # 950000
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD_lower2.txt": 25000000}
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD_lower2.txt": 25000000}
 	eval_every_step = 1000
 	# eval_every_step = 10
 

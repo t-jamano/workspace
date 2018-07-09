@@ -393,7 +393,7 @@ class VarAutoEncoderQD3(object):
         # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
         # 
         # cos_qd = Flatten()(merge([cos_encoded_q, cos_encoded_d], mode="cos",))
-        cos_qd = Flatten()(merge([cos_encoded_q, cos_encoded_d], mode="mul",))
+        cos_qd = merge([cos_encoded_q, cos_encoded_d], mode="mul",)
 
         cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
 
@@ -607,7 +607,8 @@ class VarAutoEncoderQD2(object):
         # old
         # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
         # 
-        cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
+        # cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
+        cos_qd = merge([self.q_mean, self.d_mean], mode="mul",)
         cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
 
 
