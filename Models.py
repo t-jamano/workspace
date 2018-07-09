@@ -461,7 +461,7 @@ class VarAutoEncoderQD3(object):
             self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
 
         else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'])
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.alpha])
 
             # self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
 
@@ -1688,7 +1688,7 @@ class CLSM():
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -1736,7 +1736,7 @@ class DSSM():
 
         # We now have everything we need to define our model.
         self.model = Model(inputs = [query, pos_doc] + neg_docs, outputs = prob)
-        self.model.compile(optimizer = "adadelta", loss = "categorical_crossentropy")
+        self.model.compile(optimizer = optimizer, loss = "categorical_crossentropy")
 
         self.encoder = Model(inputs=query, outputs=query_sem)
 

@@ -36,6 +36,8 @@ def parse_args():
     parser.add_argument('--o', nargs='?', default='adam',
                         help='Specify an optimizer: adagrad, adam, rmsprop, sgd')
 
+
+
     return parser.parse_args()
 
 
@@ -114,7 +116,7 @@ if __name__ == '__main__':
 	# =================================== Initiate Model ==============================================
 
 	if model == "dssm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True))
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "bilstm":
 		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=bpe.get_keras_embedding(True))
@@ -258,6 +260,9 @@ if __name__ == '__main__':
 				print(print_output)
 				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
 					myfile.write(file_output)
+
+
+				
 
 
 
