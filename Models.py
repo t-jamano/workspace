@@ -1136,9 +1136,6 @@ class VarAutoEncoder2(object):
         input_layer = Input(shape=(self.max_len, self.nb_words, ))
         #fix
         embed_layer = OnehotEmbedding(self.emb.get_weights()[0].shape[1])
-        print(embed_layer.get_weights()[0].shape)
-        print(self.emb.get_weights()[0].shape)
-        embed_layer.set_weights(self.emb.get_weights()[0])
         bilstm = Bidirectional(LSTM(self.dim[0]))
 
         hidden_layer1 = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
@@ -1149,7 +1146,10 @@ class VarAutoEncoder2(object):
 
         pred = Dense(1, activation="sigmoid")(h1)
 
-        return Model(input_layer, pred)
+        model = Model(input_layer, pred)
+        embed_layer.set_weights(self.emb.get_weights()[0])
+        return model
+
 
     def vae_loss(self, x, x_decoded_mean):
         # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
