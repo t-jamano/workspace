@@ -134,10 +134,10 @@ if __name__ == '__main__':
 		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True))
 		run.initModel(sp, bpe_dict)
 	elif model == "vae":
-		run = KATE(nb_words, [hidden_dim, latent_dim])
+		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate":
-		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.get_keras_embedding(train_embeddings=True), 2, "kcomp", optimizer=optimizer)
+		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, 2, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_bpe":
@@ -197,20 +197,21 @@ if __name__ == '__main__':
 	df_june, qrel_june = get_test_data("JuneFlower", path)
 	df_july, qrel_july = get_test_data("JulyFlower", path)
 
-	enablePadding = True
 
 	if model in ["kate", "vae"]:
+		enablePadding = True
 
-		q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
-		d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+		d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
-		q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
-		d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+		d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
-		q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
-		d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+		d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
 	else:
+		enablePadding = True
 
 		q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
 		d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
@@ -243,13 +244,13 @@ if __name__ == '__main__':
 
 			
 			try:
-				if model in ["kate2_qdg1", "kate2_qdg2", "kate2bpeg"]:
+				if model in ["kate2_qdg1", "kate2_qdg2", "kate2_bpeg"]:
 					t1 = time()
 					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					t2 = time()
 					losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history] + [ "%s = %.4f" % (k, hist_dis.history[k][-1]) for k in hist_dis.history])
-				
+					print(losses)
 				else:
 					t1 = time()
 

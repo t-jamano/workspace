@@ -39,14 +39,15 @@ from copy import copy
 
 class OnehotEmbedding(Layer):
 
-    def __init__(self, Nembeddings, **kwargs):
+    def __init__(self, Nembeddings, d=2, **kwargs):
         self.Nembeddings = Nembeddings
+        self.d = d
         super(OnehotEmbedding, self).__init__(**kwargs)
 
     def build(self, input_shape):
         # Create a trainable weight variable for this layer.
         self.kernel = self.add_weight(name='kernel',
-                                      shape=(input_shape[2], self.Nembeddings),
+                                      shape=(input_shape[self.d], self.Nembeddings),
                                       initializer='uniform',
                                       trainable=True)
         super(OnehotEmbedding, self).build(input_shape)  # Be sure to call this at the end
@@ -56,7 +57,6 @@ class OnehotEmbedding(Layer):
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], self.Nembeddings)
-
 
 
 class KCompetitive(Layer):
@@ -1224,7 +1224,7 @@ class KATE(object):
 
         act = 'tanh'
         input_layer = Input(shape=(self.input_size,))
-        embed_layer = self.emb
+        embed_layer = OnehotEmbedding(emb.shape[1], d=1)
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
 
         h1 = embed_layer(input_layer)
@@ -1243,7 +1243,7 @@ class KATE(object):
         # we instantiate these layers separately so as to reuse them later
         decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         h_decoded = decoder_h(encoded)
-        decoder_mean = Dense_tied(self.input_size, activation='sigmoid', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.input_size, activation='sigmoid')
         x_decoded_mean = decoder_mean(h_decoded)
 
         self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
@@ -1256,6 +1256,9 @@ class KATE(object):
         _x_decoded_mean = decoder_mean(_h_decoded)
         self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
         self.model.compile(optimizer=optimizer, loss=self.vae_loss)
+
+        embed_layer.set_weights([self.emb])
+
 
 
     def vae_loss(self, x, x_decoded_mean):
