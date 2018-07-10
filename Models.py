@@ -1147,7 +1147,7 @@ class VarAutoEncoder2(object):
         pred = Dense(1, activation="sigmoid")(h1)
 
         model = Model(input_layer, pred)
-        embed_layer.set_weights(self.emb.get_weights()[0])
+        embed_layer.set_weights(self.emb.get_weights())
         return model
 
 
