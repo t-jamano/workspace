@@ -1227,12 +1227,12 @@ class KATE(object):
         embed_layer = self.emb
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
 
-        h1 = Flatten()(embed_layer(input_layer))
+        h1 = embed_layer(input_layer)
         h1 = hidden_layer1(h1)
 
 
-        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        self.z_mean = Flatten()(Dense(self.dim[1], kernel_initializer='glorot_normal')(h1))
+        self.z_log_var = Flatten()(Dense(self.dim[1], kernel_initializer='glorot_normal')(h1))
 
         if self.comp_topk != None:
             self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
