@@ -1208,31 +1208,28 @@ class VarAutoEncoder2(object):
                 yield x_[idx], y_[idx]
 
 
-class VarAutoEncoder(object):
-    """VarAutoEncoder for topic modeling.
+class KATE(object):
 
-        Parameters
-        ----------
-        dim : dimensionality of encoding space.
 
-        nb_epoch :
-
-        """
-
-    def __init__(self, input_size, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
+    def __init__(self, input_size, dim, emb, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', optimizer=Adadelta(lr=2.)):
         self.input_size = input_size
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
         self.epsilon_std = epsilon_std
         self.save_model = save_model
+        self.emb = emb
 
         self.nb_words = input_size
 
         act = 'tanh'
         input_layer = Input(shape=(self.input_size,))
+        embed_layer = self.emb
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        h1 = hidden_layer1(input_layer)
+
+        h1 = embed_layer(input_layer)
+        h1 = hidden_layer1(h1)
+
 
         self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
         self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
@@ -1258,7 +1255,6 @@ class VarAutoEncoder(object):
         _h_decoded = decoder_h(decoder_input)
         _x_decoded_mean = decoder_mean(_h_decoded)
         self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
-        optimizer = Adadelta(lr=2.)
         self.model.compile(optimizer=optimizer, loss=self.vae_loss)
 
 
@@ -1283,12 +1279,8 @@ class VarAutoEncoder(object):
         while True:
             for df in reader:
                 
-                x = []
-                for text in df.q.tolist():
-                    x.append([self.bpe_dict[t] if t in self.bpe_dict else self.bpe_dict['<unk>'] for t in self.sp.EncodeAsPieces(text)])
-                
-                x = np.array(x)
-                # No need for paddind, we do bow vector 
+
+                x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, enablePadding=False)
                 x_one_hot = to_2D_one_hot(x, self.nb_words)
                                 
                 yield x_one_hot, x_one_hot

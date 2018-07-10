@@ -133,11 +133,11 @@ if __name__ == '__main__':
 		#TODO Frozen or Trainable embedding option
 		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True))
 		run.initModel(sp, bpe_dict)
-	elif model == "kate1":
-		run = VarAutoEncoder(nb_words, [hidden_dim, latent_dim])
+	elif model == "vae":
+		run = KATE(nb_words, [hidden_dim, latent_dim])
 		run.initModel(sp, bpe_dict)
-	elif model == "kate2":
-		run = VarAutoEncoder(nb_words, [hidden_dim, latent_dim], 2, "kcomp")
+	elif model == "kate":
+		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.get_keras_embedding(train_embeddings=True), 2, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_bpe":
@@ -199,14 +199,27 @@ if __name__ == '__main__':
 
 	enablePadding = True
 
-	q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+	if model in ["kate", "vae"]:
 
-	q_june = parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_june = parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+		q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
 
-	q_july = parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_july = parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+		q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+
+		q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+		d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, enablePadding=enablePadding), nb_words)
+
+	else:
+
+		q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+		d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+
+		q_june = parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+		d_june = parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+
+		q_july = parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+		d_july = parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding)
 
 
 	test_set = [[q_may, d_may, qrel_may, df_may, "MayFlower"], [q_june, d_june, qrel_june, df_june, "JuneFlower"], [q_july, d_july, qrel_july, df_july, "JulyFlower"]]

@@ -170,7 +170,7 @@ def parse_texts(texts, tokeniser, max_len):
 
     return x
 
-def parse_texts_bpe(texts, sp, bpe_dict, max_len, enablePadding=True):
+def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True):
 
     x = []
     for text in texts:
