@@ -69,7 +69,7 @@ if __name__ == '__main__':
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
 	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD_lower2.txt": 25000000}
-	eval_every_step = 1000
+	eval_every_step = 1
 	# eval_every_step = 10
 
 
@@ -145,6 +145,9 @@ if __name__ == '__main__':
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe":
 		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
+		run.initModel(sp, bpe_dict)
+	elif model == "kate2_bpeg":
+		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe_adam":
 		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", optimizer=optimizer)
@@ -227,7 +230,7 @@ if __name__ == '__main__':
 
 			
 			try:
-				if model in ["kate2_qdg1", "kate2_qdg2"]:
+				if model in ["kate2_qdg1", "kate2_qdg2", "kate2bpeg"]:
 					t1 = time()
 					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 					hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
@@ -260,9 +263,6 @@ if __name__ == '__main__':
 				print(print_output)
 				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
 					myfile.write(file_output)
-
-
-				
 
 
 

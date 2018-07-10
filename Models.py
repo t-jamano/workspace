@@ -1035,7 +1035,7 @@ class VarAutoEncoder2(object):
         nb_epoch :
 
         """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', optimizer=Adadelta(lr=2.)):
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', optimizer=Adadelta(lr=2.), enableGAN=False):
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
@@ -1044,6 +1044,7 @@ class VarAutoEncoder2(object):
 
         self.nb_words = nb_words
         self.max_len = max_len
+        self.emb = emb
 
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
@@ -1076,18 +1077,55 @@ class VarAutoEncoder2(object):
         h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
         x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
 
-        
-        self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
+        if enableGAN:
+            self.discriminator = self.build_discriminator()
+            self.discriminator.compile(loss='binary_crossentropy',
+                optimizer=optimizer,
+                metrics=['accuracy'])
+
+            validity = self.discriminator(x_decoded_mean)
+
+        if enableGAN:
+            self.model = Model(outputs=[x_decoded_mean, validity], inputs=input_layer)
+        else:
+            self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
         # build a model to project inputs on the latent space
         self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
 
         # build a digit generator that can sample from the learned distribution
         # decoder_input = Input(shape=(self.dim[1],))
         # _h_decoded = decoder_h(decoder_input)
         # _x_decoded_mean = decoder_mean(_h_decoded)
         # self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
-        self.model.compile(optimizer=optimizer, loss=self.vae_loss)
+        if enableGAN:
+            self.model.compile(optimizer=optimizer, loss=[self.vae_loss, "binary_crossentropy"])
+        else:    
+            self.model.compile(optimizer=optimizer, loss=self.vae_loss)
 
+        
+
+
+                
+                
+                
+    def build_discriminator(self):
+        # can be CNN proposed by Kim
+        act = 'tanh'
+        input_layer = Input(shape=(self.max_len,))
+        embed_layer = self.emb
+        bilstm = Bidirectional(LSTM(self.dim[0]))
+
+
+        hidden_layer1 = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
+        
+        h1 = embed_layer(input_layer)
+        h1 = bilstm(h1)
+        h1 = hidden_layer1(h1)
+
+        pred = Dense(1, ctivation="sigmoid")
+
+        return Model(input_layer, pred)
 
     def vae_loss(self, x, x_decoded_mean):
         # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
@@ -1119,6 +1157,28 @@ class VarAutoEncoder2(object):
                 x_one_hot = to_categorical(x, self.nb_words)
                 x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
                 yield x, x_one_hot
+
+    def batch_GAN_generator(self, reader, train_data, batch_size, graph):
+        while True:
+            for df in reader:
+
+                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+
+                with graph.as_default():
+                    # shuffle(x)
+                    q_fake = np.argmax(self.model.predict(q)[0], axis=-1).reshape(batch_size, self.max_len)
+                    q_real = q
+                    
+                    ones = np.ones(batch_size)
+                    zeros = np.zeros(batch_size)
+
+
+                    x_ = np.concatenate([q_real, q_fake])
+                    y_ = np.concatenate([ones, zeros])
+
+                    idx = np.random.randint(batch_size * 2, size=batch_size * 2)
+
+                yield x_[idx], y_[idx]
 
 
 class VarAutoEncoder(object):
