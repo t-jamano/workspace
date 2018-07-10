@@ -1227,7 +1227,7 @@ class KATE(object):
         embed_layer = self.emb
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
 
-        h1 = embed_layer(input_layer)
+        h1 = Flatten()(embed_layer(input_layer))
         h1 = hidden_layer1(h1)
 
 
