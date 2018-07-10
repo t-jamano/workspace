@@ -1136,6 +1136,8 @@ class VarAutoEncoder2(object):
         input_layer = Input(shape=(self.max_len, self.nb_words, ))
         #fix
         embed_layer = OnehotEmbedding(self.emb.get_weights()[0].shape[1])
+        print(embed_layer.get_weights()[0].shape)
+        print(self.emb.get_weights()[0].shape)
         embed_layer.set_weights(self.emb.get_weights()[0])
         bilstm = Bidirectional(LSTM(self.dim[0]))
 
