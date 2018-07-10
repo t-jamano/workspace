@@ -1180,7 +1180,9 @@ class VarAutoEncoder2(object):
                 x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
                 x_one_hot = to_categorical(x, self.nb_words)
                 x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                yield x, x_one_hot
+                ones = np.ones(batch_size)
+
+                yield x, [x_one_hot, ones]
 
     def batch_GAN_generator(self, reader, train_data, batch_size, graph):
         while True:
