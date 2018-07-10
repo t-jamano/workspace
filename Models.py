@@ -37,6 +37,27 @@ import sentencepiece as spm
 from copy import copy
 
 
+class OnehotEmbedding(Layer):
+
+    def __init__(self, Nembeddings, **kwargs):
+        self.Nembeddings = Nembeddings
+        super(OnehotEmbedding, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.kernel = self.add_weight(name='kernel',
+                                      shape=(input_shape[2], self.Nembeddings),
+                                      initializer='uniform',
+                                      trainable=True)
+        super(OnehotEmbedding, self).build(input_shape)  # Be sure to call this at the end
+
+    def call(self, x):
+        return K.dot(x, self.kernel)
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[1], self.Nembeddings)
+
+
 
 class KCompetitive(Layer):
     '''Applies K-Competitive layer.
@@ -1112,10 +1133,10 @@ class VarAutoEncoder2(object):
     def build_discriminator(self):
         # can be CNN proposed by Kim
         act = 'tanh'
-        input_layer = Input(shape=(self.max_len,))
-        embed_layer = self.emb
+        input_layer = Input(shape=(self.max_len, self.nb_words, ))
+	embed_layer = OnehotEmbedding(self.emb.get_weights()[0].shape[1])
+	embed_layer.set_weights(self.emb.get_weights())
         bilstm = Bidirectional(LSTM(self.dim[0]))
-
 
         hidden_layer1 = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
         
@@ -1163,11 +1184,12 @@ class VarAutoEncoder2(object):
             for df in reader:
 
                 q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+                q_one_hot = to_categorical(q, self.nb_words)
+                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
 
                 with graph.as_default():
-                    # shuffle(x)
-                    q_fake = np.argmax(self.model.predict(q)[0], axis=-1).reshape(batch_size, self.max_len)
-                    q_real = q
+                    q_fake = self.model.predict(q)[0]
+                    q_real = q_one_hot
                     
                     ones = np.ones(batch_size)
                     zeros = np.zeros(batch_size)
