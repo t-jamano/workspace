@@ -1770,7 +1770,7 @@ class CLSM():
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None, enableSeparate=False):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -1788,14 +1788,21 @@ class DSSM():
         dense1 = Dense(self.hidden_dim, activation = "tanh")
         dense2 = Dense(self.latent_dim, activation = "tanh")
 
+        if enableSeparate:
+            d_embed_layer = emb
+            d_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
+            d_dense1 = Dense(self.hidden_dim, activation = "tanh")
+            d_dense2 = Dense(self.latent_dim, activation = "tanh")
+
+
 
 
         query_sem = dense2(dense1(bilstm(embed_layer(query))))
 
 
 
-        pos_doc_sem = dense2(dense1(bilstm(embed_layer(pos_doc))))
-        neg_doc_sems = [dense2(dense1(bilstm(embed_layer(neg_doc)))) for neg_doc in neg_docs]
+        pos_doc_sem = dense2(dense1(bilstm(embed_layer(pos_doc)))) if not enableSeparate else d_dense2(d_dense1(d_bilstm(d_embed_layer(pos_doc))))
+        neg_doc_sems = [dense2(dense1(bilstm(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [d_dense2(d_dense1(d_bilstm(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
 
         # This layer calculates the cosine similarity between the semantic representations of
         # a query and a document.
@@ -1851,3 +1858,4 @@ class DSSM():
                 
                 
                 yield [q, d] + [neg[j] for j in range(self.num_negatives)], y
+

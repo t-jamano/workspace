@@ -118,6 +118,9 @@ if __name__ == '__main__':
 	if model == "dssm":
 		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
+	if model == "dssm2":
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer, enableSeparate=True)
+		run.initModel(sp, bpe_dict)
 	elif model == "bilstm":
 		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=bpe.get_keras_embedding(True))
 		run.initModel(sp, bpe_dict)
