@@ -1104,7 +1104,7 @@ class VarAutoEncoder2(object):
             self.model.compile(optimizer=optimizer, loss=self.vae_loss)
 
         
-
+           
 
                 
                 
@@ -1123,7 +1123,7 @@ class VarAutoEncoder2(object):
         h1 = bilstm(h1)
         h1 = hidden_layer1(h1)
 
-        pred = Dense(1, ctivation="sigmoid")
+        pred = Dense(1, activation="sigmoid")(h1)
 
         return Model(input_layer, pred)
 
