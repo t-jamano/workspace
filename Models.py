@@ -1231,8 +1231,8 @@ class KATE(object):
         h1 = hidden_layer1(h1)
 
 
-        self.z_mean = Flatten()(Dense(self.dim[1], kernel_initializer='glorot_normal')(h1))
-        self.z_log_var = Flatten()(Dense(self.dim[1], kernel_initializer='glorot_normal')(h1))
+        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
 
         if self.comp_topk != None:
             self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
