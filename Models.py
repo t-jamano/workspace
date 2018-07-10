@@ -1136,7 +1136,7 @@ class VarAutoEncoder2(object):
         input_layer = Input(shape=(self.max_len, self.nb_words, ))
         #fix
         embed_layer = OnehotEmbedding(self.emb.get_weights()[0].shape[1])
-        embed_layer.set_weights(self.emb.get_weights())
+        embed_layer.set_weights(self.emb.get_weights()[0])
         bilstm = Bidirectional(LSTM(self.dim[0]))
 
         hidden_layer1 = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
