@@ -171,7 +171,7 @@ if __name__ == '__main__':
 	elif model == "kate2_qd2":
 		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qd3":
+	elif model == "kate2_qd3_dssm":
 		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
