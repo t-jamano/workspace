@@ -449,40 +449,13 @@ class VarAutoEncoderQD3(object):
         cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
 
 
-        if self.enableCross:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableMemory:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_m_q, cos_m_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableGAN:
-            self.discriminator = self.build_discriminator()
-            validity_q = self.discriminator(encoded_q)
-            validity_d = self.discriminator(encoded_d)
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, validity_q, validity_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-    
-        else:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
+        self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
 
 
         self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
 
 
-        # optimizer = Adam()
-        # optimizer = Adadelta(lr=2.)
-        if self.enableCross:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'], loss_weights=[1, 1, 1, 1, self.pred_weight])
-        
-        elif self.enableMemory:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-        
-        elif self.enableGAN:
-            # , loss_weights=[0.999, 0.999, 0.001, 0.001, 0.999]
-            self.discriminator.compile(loss='binary_crossentropy',optimizer=optimizer,metrics=['accuracy'])
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-
-        else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.alpha])
+        self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.alpha])
 
             # self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
 
@@ -508,21 +481,6 @@ class VarAutoEncoderQD3(object):
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
         return xent_loss
 
-    def build_discriminator(self):
-
-        dis = Sequential()
-
-        dis.add(Dense(self.dim[0], input_dim=self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(1, activation="sigmoid"))
-
-        encoded_repr = Input(shape=(self.dim[1], ))
-        validity = dis(encoded_repr)
-
-        return Model(encoded_repr, validity)
-
 
     def sampling(self, args):
         z_mean, z_log_var = args
@@ -535,28 +493,58 @@ class VarAutoEncoderQD3(object):
         self.sp = sp
         self.bpe_dict = bpe_dict
 
+    # def batch_generator(self, reader, train_data, batch_size):
+    #     while True:
+    #         for df in reader:
+
+    #             q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+    #             d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+                
+    #             q_one_hot = to_categorical(q, self.nb_words)
+    #             q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+                
+    #             d_one_hot = to_categorical(d, self.nb_words)
+    #             d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
+
+    #             if self.enableCross:
+    #                 yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
+    #             elif self.enableMemory or self.enableGAN:
+    #                 one = np.ones(batch_size)
+    #                 yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
+    #             else:
+    #                 yield [q,d], [q_one_hot, d_one_hot, df.label.values]
+
     def batch_generator(self, reader, train_data, batch_size):
         while True:
             for df in reader:
 
                 q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
                 d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                
+
                 q_one_hot = to_categorical(q, self.nb_words)
                 q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
                 
                 d_one_hot = to_categorical(d, self.nb_words)
                 d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
 
-                if self.enableCross:
-                    yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
-                elif self.enableMemory or self.enableGAN:
-                    one = np.ones(batch_size)
-                    yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
-                else:
-                    yield [q,d], [q_one_hot, d_one_hot, df.label.values]
-
-
+                # negative sampling from positive pool
+                neg = [[] for j in range(self.num_negatives)]
+                for i in range(batch_size):
+                    possibilities = list(range(batch_size))
+                    possibilities.remove(i)
+                    negatives = np.random.choice(possibilities, self.num_negatives, replace = False)
+                    for j in range(self.num_negatives):
+                        negative = negatives[j]
+                        neg[j].append(d[negative].tolist())
+                
+                y = np.zeros((batch_size, self.num_negatives + 1))
+                y[:, 0] = 1
+                
+                for j in range(self.num_negatives):
+                    neg[j] = np.array(neg[j])
+                
+                yield [q, d] + [neg[j] for j in range(self.num_negatives)], [q_one_hot, d_one_hot, y]
+                
 # BPE version
 class VarAutoEncoderQD2(object):
     """VarAutoEncoder for topic modeling.
@@ -1046,7 +1034,7 @@ class VarAutoEncoderQD(object):
                 yield x_[idx], y_[idx]
 
 # BPE version
-class VarAutoEncoder2(object):
+class KATE3D(object):
     """VarAutoEncoder for topic modeling.
 
         Parameters
@@ -1206,6 +1194,7 @@ class VarAutoEncoder2(object):
                     idx = np.random.randint(batch_size * 2, size=batch_size * 2)
 
                 yield x_[idx], y_[idx]
+
 
 
 class KATE(object):

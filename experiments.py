@@ -144,18 +144,18 @@ if __name__ == '__main__':
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_bpe":
-		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim])
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim])
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe":
-		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpeg":
-		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "kate2_bpe_adam":
-		run = VarAutoEncoder2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", optimizer=optimizer)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "aae":
