@@ -310,7 +310,7 @@ class VarAutoEncoderQD3(object):
         nb_epoch :
 
         """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5, optimizer=Adadelta(lr=2.)):
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5, optimizer=Adadelta(lr=2.), num_negatives=1):
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
@@ -323,11 +323,17 @@ class VarAutoEncoderQD3(object):
         self.enableMemory = enableMemory
         self.enableGAN = enableGAN
         self.alpha = alpha
+        self.num_negatives = num_negatives
+
+
+        
+
 
         act = 'tanh'
         
         q_input_layer = Input(shape=(self.max_len,))
         d_input_layer = Input(shape=(self.max_len,))
+        n_d_input_layer = [Input(shape =(self.max_len,)) for j in range(self.num_negatives)]
 
         
         embed_layer = emb
@@ -350,12 +356,23 @@ class VarAutoEncoderQD3(object):
         cos_q = cos_embed_layer(q_input_layer)
         cos_q = cos_bilstm(cos_q)
         cos_q = cos_hidden_layer1(cos_q)
-        
-        cos_d = cos_embed_layer(d_input_layer)
-        cos_d = cos_bilstm(cos_d)
-        cos_d = cos_hidden_layer1(cos_d)
+
+        query_sem = cos_hidden_layer1(cos_bilstm(cos_embed_layer(q_input_layer)))
+        pos_doc_sem = cos_hidden_layer1(cos_bilstm(cos_embed_layer(d_input_layer)))
+        neg_doc_sems = [cos_hidden_layer1(cos_bilstm(cos_embed_layer(neg_doc))) for neg_doc in n_d_input_layer]
 
 
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
+
+        concat_Rs = concatenate([R_Q_D_p] + R_Q_D_ns)
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+
+        weight = np.array([1]).reshape(1, 1, 1)
+        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+
+        prob = Activation("softmax")(with_gamma) # See equation (5).
 
 
 
@@ -410,16 +427,6 @@ class VarAutoEncoderQD3(object):
 
 
 
-        # old
-        # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
-        # 
-        # cos_qd = Flatten()(merge([cos_encoded_q, cos_encoded_d], mode="cos",))
-        cos_qd = merge([cos_encoded_q, cos_encoded_d], mode="mul",)
-
-        cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
-
-
-
         # we instantiate these layers separately so as to reuse them later
         decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
@@ -445,17 +452,14 @@ class VarAutoEncoderQD3(object):
         d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
 
 
-        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos", name="cos_q"))
-        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
 
-
-        self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
+        self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, prob], inputs=[q_input_layer, d_input_layer] + n_d_input_layer)
 
 
         self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
 
 
-        self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.alpha])
+        self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'categorical_crossentropy'], loss_weights=[1,1, self.alpha])
 
             # self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
 
