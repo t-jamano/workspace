@@ -28,6 +28,8 @@ def parse_args():
     # May need them later
     parser.add_argument('--e', type=int, default=1,
                         help='Number of epochs.')
+   	parser.add_argument('--k', type=int, default=2,
+                        help='Number of K.')
     parser.add_argument('--b', type=int, default=128,
                         help='Number of batch size.')
     parser.add_argument('--a', type=float, default=0.5,
@@ -62,13 +64,14 @@ if __name__ == '__main__':
 	num_negatives = args.neg
 	epochs = args.e
 	alpha = args.a
+	k = args.k
 
 	out_dir = "%sdata/out/" % path
 
 # 950000
-	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 20000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
+	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD_lower2.txt": 25000000}
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 150000, "100M_query": 10000000, "30M_QD_lower2.txt": 150000}
 	eval_every_step = 1000
 	# eval_every_step = 10
 
@@ -140,48 +143,48 @@ if __name__ == '__main__':
 		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate":
-		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, 2, "kcomp", optimizer=optimizer)
+		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, k, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_bpe":
 		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim])
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpeg":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "kate2_bpe_adam":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", optimizer=optimizer)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "aae":
-		run = AAE(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp")
+		run = AAE(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd2":
-		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd3_dssm":
-		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableCross=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdm":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableMemory=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
 		run.initModel(sp, bpe_dict)
 	elif model in ["kate2_qdg1", "kate2_qdg2"]:
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], 2, "kcomp", enableGAN=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		if model == "kate2_qdg2":
 			run.discriminator.trainable = False
@@ -191,7 +194,7 @@ if __name__ == '__main__':
 
 
 
-	model_name = "%s_h%d_l%d_n%d_ml%d_w%d_b%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, num_negatives, max_len, nb_words, batch_size, alpha, optimizer, tokenise_name, train_data, date_time)
+	model_name = "%s_h%d_l%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name, train_data, date_time)
 
 	
 

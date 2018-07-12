@@ -392,10 +392,10 @@ class VarAutoEncoderQD3(object):
         self.d_log_var = dense_var(d)
 
         # cosine part 
-        self.cos_q_mean = cos_dense_mean(cos_q)
-        self.cos_q_log_var = cos_dense_var(cos_q)
-        self.cos_d_mean = cos_dense_mean(cos_d)
-        self.cos_d_log_var = cos_dense_var(cos_d)
+        # self.cos_q_mean = cos_dense_mean(cos_q)
+        # self.cos_q_log_var = cos_dense_var(cos_q)
+        # self.cos_d_mean = cos_dense_mean(cos_d)
+        # self.cos_d_log_var = cos_dense_var(cos_d)
 
         # add private
         # self.q_mean = merge([self.q_mean, self.cos_q_mean], mode="sum")
@@ -409,21 +409,21 @@ class VarAutoEncoderQD3(object):
             self.q_mean = kc_layer(self.q_mean)
             self.d_mean = kc_layer(self.d_mean)
 
-            kc_layer = KCompetitive(self.comp_topk, self.ctype)
-            self.cos_q_mean = kc_layer(self.cos_q_mean)
-            self.cos_d_mean = kc_layer(self.cos_d_mean)
+            # kc_layer = KCompetitive(self.comp_topk, self.ctype)
+            # self.cos_q_mean = kc_layer(self.cos_q_mean)
+            # self.cos_d_mean = kc_layer(self.cos_d_mean)
 
         # note that "output_shape" isn't necessary with the TensorFlow backend
         encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
         encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
 
 
-        cos_encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_q_mean, self.cos_q_log_var])
-        cos_encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_d_mean, self.cos_d_log_var])
+        # cos_encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_q_mean, self.cos_q_log_var])
+        # cos_encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_d_mean, self.cos_d_log_var])
         # add private
 
-        encoded_q = merge([encoded_q, cos_encoded_q], mode="sum")
-        encoded_d = merge([encoded_d, cos_encoded_d], mode="sum")
+        # encoded_q = merge([encoded_q, cos_encoded_q], mode="sum")
+        # encoded_d = merge([encoded_d, cos_encoded_d], mode="sum")
 
 
 
@@ -1058,6 +1058,7 @@ class KATE3D(object):
         self.nb_words = nb_words
         self.max_len = max_len
         self.emb = emb
+        self.enableGAN = enableGAN
 
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
@@ -1090,7 +1091,7 @@ class KATE3D(object):
         h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
         x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
 
-        if enableGAN:
+        if self.enableGAN:
             self.discriminator = self.build_discriminator()
             self.discriminator.compile(loss='binary_crossentropy',
                 optimizer=optimizer,
@@ -1098,7 +1099,7 @@ class KATE3D(object):
 
             validity = self.discriminator(x_decoded_mean)
 
-        if enableGAN:
+        if self.enableGAN:
             self.model = Model(outputs=[x_decoded_mean, validity], inputs=input_layer)
         else:
             self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
@@ -1174,7 +1175,9 @@ class KATE3D(object):
                 x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
                 ones = np.ones(batch_size)
 
-                yield x, [x_one_hot, ones]
+                yield x, x_one_hot
+
+                # yield x, [x_one_hot, ones] if self.enableGAN else x, x_one_hot
 
     def batch_GAN_generator(self, reader, train_data, batch_size, graph):
         while True:
