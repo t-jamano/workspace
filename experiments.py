@@ -28,8 +28,7 @@ def parse_args():
     # May need them later
     parser.add_argument('--e', type=int, default=1,
                         help='Number of epochs.')
-   	parser.add_argument('--k', type=int, default=2,
-                        help='Number of K.')
+    parser.add_argument('--k', type=int, default=2, help='Number of K.')
     parser.add_argument('--b', type=int, default=128,
                         help='Number of batch size.')
     parser.add_argument('--a', type=float, default=0.5,
