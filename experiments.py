@@ -193,7 +193,7 @@ if __name__ == '__main__':
 
 
 
-	model_name = "%s_h%d_l%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name, train_data, date_time)
+	model_name = "%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name, train_data, date_time)
 
 	
 
