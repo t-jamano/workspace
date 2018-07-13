@@ -21,9 +21,9 @@ from keras.layers.merge import concatenate, dot
 from keras.layers.advanced_activations import LeakyReLU
 # from keras_tqdm import TQDMNotebookCallback
 # from keras_tqdm import TQDMCallback
-from keras_adversarial.legacy import l1l2
-from keras_adversarial import AdversarialModel, fix_names, n_choice
-from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling
+# from keras_adversarial.legacy import l1l2
+# from keras_adversarial import AdversarialModel, fix_names, n_choice
+# from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling
 from keras.layers import LeakyReLU, Activation
 from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
