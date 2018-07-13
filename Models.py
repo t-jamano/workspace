@@ -1145,7 +1145,6 @@ class KATE3D(object):
 
 
     def vae_loss(self, x, x_decoded_mean):
-        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
         x = K.flatten(x)
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)

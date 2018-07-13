@@ -70,7 +70,7 @@ if __name__ == '__main__':
 # 950000
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 150000, "100M_query": 10000000, "30M_QD_lower2.txt": 150000}
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 150000, "100M_query": 10000000, "30M_QD.txt": 150000, "30M_QD_lower2.txt":150000}
 	eval_every_step = 1000
 	# eval_every_step = 10
 
@@ -278,8 +278,8 @@ if __name__ == '__main__':
 
 				
 
-				print_output = '%s_a%.1f, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, [%.1f s] \n' % (model, alpha, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], time()-t2)
-				file_output = '%s_a%.1f, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
+				print_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], time()-t2)
+				file_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
 
 				print(print_output)
 				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
