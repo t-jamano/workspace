@@ -128,6 +128,12 @@ def get_reader(train_data, batch_size, path):
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "100M_query":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0], names=["q"], sep="\t", header=None, error_bad_lines=False)
+    elif train_data == "QueryLog":
+        reader = pd.read_csv(train_data_dir, names=["q"], sep="\t", header=None, error_bad_lines=False)
+        # reader = pd.read_csv(train_data_dir, nrows=100000, names=["q"], sep="\t", header=None, error_bad_lines=False)
+    elif train_data == "QueryQueryLog":
+        # reader = pd.read_csv(train_data_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
+        reader = pd.read_csv(train_data_dir, nrows=50000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
     return reader
 
 
@@ -190,7 +196,7 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True):
                 tmp.append(bpe_dict['<unk>'])
         x.append(tmp)
     
-    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len)
+    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len, padding='post')
 
 
 def to_2D_one_hot(x, nb_words):

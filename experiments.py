@@ -1,5 +1,6 @@
 from Utils import *
 from Models import *
+from FastModels import *
 from BatchGenerator import *
 import datetime
 from time import time
@@ -70,7 +71,7 @@ if __name__ == '__main__':
 # 950000
 	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
 
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 150000, "100M_query": 10000000, "30M_QD.txt": 150000, "30M_QD_lower2.txt":150000}
+	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 10000, "100M_query": 10000000, "30M_QD.txt": 150000, "30M_QD_lower2.txt":150000, "QueryLog": 4000000, "QueryQueryLog": 3600000}
 	eval_every_step = 1000
 	# eval_every_step = 10
 
@@ -105,8 +106,9 @@ if __name__ == '__main__':
 		sp = spm.SentencePieceProcessor()
 		sp.Load('%sdata/bpe/en.wiki.bpe.op50000.model' % path)
 		bpe = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
-		nb_words = len(bpe.index2word)
+		bpe2 = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
 
+		nb_words = len(bpe.index2word)
 		bpe_dict = {bpe.index2word[i]: i for i in range(len(bpe.index2word))}
 
 
@@ -136,54 +138,58 @@ if __name__ == '__main__':
 		run = VAE_DSSM(hidden_dim, latent_dim, nb_words)	
 	elif model == "vae_bpe":
 		#TODO Frozen or Trainable embedding option
-		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True))
+		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(True))
 		run.initModel(sp, bpe_dict)
 	elif model == "vae":
-		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
+		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 	elif model == "kate":
-		run = KATE(nb_words, [hidden_dim, latent_dim], bpe.vectors, k, "kcomp", optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
+		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+	elif model == "kate2":
+		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
+	elif model == "vdsh":
+		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+	elif model == "vdsh_kate":
+		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 
 	elif model == "kate1_bpe":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim])
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim])
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp")
-		run.initModel(sp, bpe_dict)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp")
+		run.initModel(sp, bpe_dict, bpe.index2word)
 	elif model == "kate2_bpeg":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "kate2_bpe_adam":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
+		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "aae":
-		run = AAE(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp")
+		run = AAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd2":
-		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd3_dssm":
-		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdm":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
 		run.initModel(sp, bpe_dict)
 	elif model in ["kate2_qdg1", "kate2_qdg2"]:
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(train_embeddings=True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		if model == "kate2_qdg2":
 			run.discriminator.trainable = False
@@ -205,34 +211,85 @@ if __name__ == '__main__':
 	df_july, qrel_july = get_test_data("JulyFlower", path)
 
 
-	if model in ["kate", "vae"]:
-		enablePadding = True
+	# if model in ["kate"]:
+	# 	enablePadding = True
 
-		q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-		d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
-		q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-		d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
-		q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-		d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
+	# 	d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
 
-	else:
-		enablePadding = True
+	# else:
 
-		q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-		d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+	enablePadding = True
 
-		q_june = parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-		d_june = parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+	q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+	d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
 
-		q_july = parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-		d_july = parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+	q_june = parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+	d_june = parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+
+	q_july = parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+	d_july = parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding)
 
 
 	test_set = [[q_may, d_may, qrel_may, df_may, "MayFlower"], [q_june, d_june, qrel_june, df_june, "JuneFlower"], [q_july, d_july, qrel_july, df_july, "JulyFlower"]]
 
 	# test_set = [[q_july, d_july, qrel_july, df_july, "JulyFlower"]]
+
+	if model in ["vae", "kate", "kate2"]:
+		reader = get_reader(train_data, batch_size, path)
+		idx = int(len(reader) - ( len(reader) % batch_size))
+
+		batches = int(idx / (batch_size * 1.0))
+		val_idx = int(0.1 * batches) * batch_size
+		# print(idx, val_idx, batches)
+
+		x_train = parse_texts_bpe(reader.q.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
+		x_val = parse_texts_bpe(reader.q.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
+		
+		y_train = x_train
+		y_val = x_val
+
+		print("Train %d : Val %d" % (len(x_train), len(x_val)))
+	elif "vdsh" in model:
+
+		reader = get_reader(train_data, batch_size, path)
+		idx = int(len(reader) - ( len(reader) % batch_size))
+		batches = int(idx / (batch_size * 1.0))
+		val_idx = int(0.1 * batches) * batch_size
+
+		q_train = parse_texts_bpe(reader.q.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
+		d_train = parse_texts_bpe(reader.d.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
+
+		q_val = parse_texts_bpe(reader.q.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
+		d_val = parse_texts_bpe(reader.d.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
+
+		idx = np.arange(len(q_train))
+		shuffle(idx)
+		q_train = np.concatenate([q_train, q_train])
+		d_train = np.concatenate([d_train, d_train[idx]])
+
+		idx = np.arange(len(q_val))
+		shuffle(idx)
+		q_val = np.concatenate([q_val, q_val])
+		d_val = np.concatenate([d_val, d_val[idx]])
+
+
+		x_train = [q_train, d_train]
+		y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
+		print(len(y_train))
+		for i in y_train:
+			print(i.shape)
+
+		x_val = [q_val, d_val]
+		y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
+
+		# print("Train %d : Val %d" % (len(x_train), len(x_val)))
 
 
 	print("============Start Training================")
@@ -242,44 +299,21 @@ if __name__ == '__main__':
 
 	iterations = int(train_data_size[train_data] / batch_size)
 	for epoch in range(epochs):		
-		# restart the reader thread
-		reader = get_reader(train_data, batch_size, path)
-		reader2 = get_reader(train_data, batch_size, path)
 
-		
-		for iteration in range(int(iterations / eval_every_step)):
 
-			
+
+		if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2"]:
 			try:
-				if model in ["kate2_qdg1", "kate2_qdg2", "kate2_bpeg"]:
-					t1 = time()
-					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-					hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-					t2 = time()
-					losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history] + [ "%s = %.4f" % (k, hist_dis.history[k][-1]) for k in hist_dis.history])
-					print(losses)
-				else:
-					t1 = time()
-
-					# if "kate2_qd2" in model:
-					# 	pass
-					# elif "kate2_qd" in model:
-					# 	max_pred_weight = 150
-					# 	kl_inc = 1.0 / 5000
-					# 	pred_inc = 0.1
-					# 	run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
-					# 	run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
-
-					hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-					t2 = time()
-					losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
+				t1 = time()
+				hist = run.model.fit(x_train, y_train, epochs=1, verbose=0, batch_size=batch_size, validation_data=(x_val, y_val))       
+				t2 = time()
+				losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
 
 				may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
 
-				
 
-				print_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], time()-t2)
-				file_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
+				print_output = '%s_a%.1f_k%d, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, Val_Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], hist.history['val_loss'][-1], time()-t2)
+				file_output = '%s_a%.1f_k%d, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
 
 				print(print_output)
 				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
@@ -292,16 +326,77 @@ if __name__ == '__main__':
 					run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
 					run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
 
-
 			except Exception as e:
-				print(e)
-				pass
+					print(e)
+					pass
 
-	print("Finall Evalutation")
-	may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
-	str_output = 'May = %.4f, June = %.4f, July = %.4f \n' % (may_ndcg, june_ndcg, july_auc)
-	print(str_output)
-	with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
-		myfile.write(str_output)
+# 		Run models that cannot fit all training dataset into memory here
+		else:
+
+			# restart the reader thread
+			reader = get_reader(train_data, batch_size, path)
+			reader2 = get_reader(train_data, batch_size, path)
+
+			
+			for iteration in range(int(iterations / eval_every_step)):
+
+				
+				try:
+					if model in ["kate2_qdg1", "kate2_qdg2", "kate2_bpeg"]:
+						t1 = time()
+						hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
+						hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
+						t2 = time()
+						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history] + [ "%s = %.4f" % (k, hist_dis.history[k][-1]) for k in hist_dis.history])
+						print(losses)
+
+					else:
+						t1 = time()
+
+						# if "kate2_qd2" in model:
+						# 	pass
+						# elif "kate2_qd" in model:
+						# 	max_pred_weight = 150
+						# 	kl_inc = 1.0 / 5000
+						# 	pred_inc = 0.1
+						# 	run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
+						# 	run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
+
+						hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
+						t2 = time()
+						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
+
+					may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
+
+					# generate output
+					# run.generate_output(q_july, d_july)
+
+					
+
+					print_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], time()-t2)
+					file_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
+
+					print(print_output)
+					with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+						myfile.write(file_output)
+
+
+
+					if july_auc > best_auc_score:
+						best_auc_score = july_auc
+						run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
+						run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
+
+
+				except Exception as e:
+					print(e)
+					pass
+
+	# print("Finall Evalutation")
+	# may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
+	# str_output = 'May = %.4f, June = %.4f, July = %.4f \n' % (may_ndcg, june_ndcg, july_auc)
+	# print(str_output)
+	# with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+	# 	myfile.write(str_output)
 
 		        	

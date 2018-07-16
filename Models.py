@@ -8,7 +8,7 @@ K.set_session(session)
 
 from Utils import *
 from random import shuffle
-from keras.layers import Bidirectional, Dense, Embedding, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout
+from keras.layers import Bidirectional, Dense, Embedding, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
 from keras.layers.advanced_activations import ELU
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam, SGD, RMSprop, Adadelta
@@ -35,7 +35,10 @@ from gensim.models import KeyedVectors
 from gensim.models import KeyedVectors
 import sentencepiece as spm
 from copy import copy
+from nltk.translate.bleu_score import sentence_bleu
 
+def zero_loss(y_true, y_pred):
+    return K.zeros_like(y_pred)
 
 class OnehotEmbedding(Layer):
 
@@ -1037,6 +1040,228 @@ class VarAutoEncoderQD(object):
 
                 yield x_[idx], y_[idx]
 
+# class VDSH(object):
+    
+
+#     def __init__(self, input_size, max_len, emb, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.)):
+#         self.input_size = input_size
+#         self.dim = dim
+#         self.emb = emb
+#         self.comp_topk = comp_topk
+#         self.ctype = ctype
+#         self.epsilon_std = epsilon_std
+#         self.max_len = max_len
+#         self.batch_size = batch_size
+#         self.nb_words = input_size
+#         self.optimizer = optimizer
+#         self.build()
+
+#     def build(self):
+#         act = 'tanh'
+#         input_layer_q = Input(shape=(self.max_len,))
+#         input_layer_d = Input(shape=(self.max_len,))
+
+#         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+#         hidden_layer1_cos = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        
+#         embed_q = GlobalMaxPooling1D()(self.emb[0](input_layer_q))
+#         embed_d = GlobalMaxPooling1D()(self.emb[0](input_layer_d))
+
+#         h1_q = hidden_layer1(embed_q)
+#         h1_d = hidden_layer1(embed_d)
+        
+        
+#         embed_q_cos = GlobalMaxPooling1D()(self.emb[1](input_layer_q))
+#         embed_d_cos = GlobalMaxPooling1D()(self.emb[1](input_layer_d))
+
+#         h1_q_cos = hidden_layer1_cos(embed_q_cos)
+#         h1_d_cos = hidden_layer1_cos(embed_d_cos)
+        
+# #       merge here
+#         h1_q = merge([h1_q, h1_q_cos], mode="mul")
+#         h1_d = merge([h1_d, h1_d_cos], mode="mul")
+
+
+#         z_mean_q = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_q)
+#         z_log_var_q = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_q)
+        
+#         z_mean_d = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_d)
+#         z_log_var_d = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_d)
+
+#         if self.comp_topk != None:
+#             z_mean_k_q = KCompetitive(self.comp_topk, self.ctype)(z_mean_q)
+#             z_mean_k_d = KCompetitive(self.comp_topk, self.ctype)(z_mean_d)
+
+#             encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k_q, z_log_var_q])
+#             encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k_d, z_log_var_d])
+
+#         else:
+#             encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_q, z_log_var_q])
+#             encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_d, z_log_var_d])
+
+#         cos = Flatten()(merge([h1_q_cos, h1_d_cos], mode="cos"))
+        
+#         repeated_context = RepeatVector(self.max_len)
+#         decoder_h = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
+#         decoder_mean = TimeDistributed(Dense(self.nb_words, activation='tanh'))#softmax is applied in the seq2seqloss by tf
+       
+    
+#         h_decoded_q = decoder_h(repeated_context(encoded_q))
+#         x_decoded_mean_q = decoder_mean(h_decoded_q)
+        
+#         h_decoded_d = decoder_h(repeated_context(encoded_d))
+#         x_decoded_mean_d = decoder_mean(h_decoded_d)
+
+#         class CustomVariationalLayer(Layer):
+#             def __init__(self, max_len, batch_size, z_mean, z_log_var, **kwargs):
+#                 self.is_placeholder = True
+#                 super(CustomVariationalLayer, self).__init__(**kwargs)
+#                 self.target_weights = tf.constant(np.ones((batch_size, max_len)), tf.float32)
+#                 self.z_mean = z_mean
+#                 self.z_log_var = z_log_var
+                
+#             def vae_loss(self, x, x_decoded_mean):
+#                 labels = tf.cast(x, tf.int32)
+#                 xent_loss = K.sum(tf.contrib.seq2seq.sequence_loss(x_decoded_mean, labels, 
+#                                                              weights=self.target_weights,
+#                                                              average_across_timesteps=False,
+#                                                              average_across_batch=False), axis=-1)
+#                                                              #softmax_loss_function=softmax_loss_f), axis=-1)#, uncomment for sampled doftmax
+#                 kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+#                 # kl_loss = 0
+#                 return K.mean(xent_loss + kl_loss)
+
+#             def call(self, inputs):
+#                 x = inputs[0]
+#                 x_decoded_mean = inputs[1]
+#                 loss = self.vae_loss(x, x_decoded_mean)
+#                 self.add_loss(loss, inputs=inputs)
+#                 # we don't use this output, but it has to have the correct shape:
+#                 return K.ones_like(x)
+        
+#         loss_layer_q = CustomVariationalLayer(self.max_len, self.batch_size, z_mean_q, z_log_var_q)([input_layer_q, x_decoded_mean_q])
+#         loss_layer_d = CustomVariationalLayer(self.max_len, self.batch_size, z_mean_d, z_log_var_d)([input_layer_d, x_decoded_mean_d])
+
+#         self.model = Model([input_layer_q, input_layer_d], [loss_layer_q, loss_layer_d, cos])
+#         self.model.compile(optimizer=self.optimizer, loss=[zero_loss, zero_loss, "binary_crossentropy"])
+
+#         # build a model to project inputs on the latent space
+#         self.encoder = Model(outputs=z_mean_q, inputs=input_layer_q)
+
+
+#     def sampling(self, args):
+#         z_mean, z_log_var = args
+#         epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+#                                   stddev=self.epsilon_std)
+
+#         return z_mean + K.exp(z_log_var / 2) * epsilon
+
+class VAE(object):
+    
+
+    def __init__(self, input_size, max_len, emb, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), enableKL=True):
+        self.input_size = input_size
+        self.dim = dim
+        self.emb = emb
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.max_len = max_len
+        self.batch_size = batch_size
+        self.nb_words = input_size
+        self.optimizer = optimizer
+        self.enableKL = enableKL
+        self.build()
+
+    def build(self):
+        act = 'tanh'
+        input_layer = Input(shape=(self.max_len,))
+        emb_layer = self.emb
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        embed_x = GlobalMaxPooling1D()(self.emb(input_layer))
+        
+        h1 = hidden_layer1(embed_x)
+
+        z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+
+        if self.comp_topk != None:
+            z_mean_k = KCompetitive(self.comp_topk, self.ctype)(z_mean)
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k, z_log_var])
+        else:
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean, z_log_var])
+
+
+        repeated_context = RepeatVector(self.max_len)
+        decoder_h = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
+        decoder_mean = TimeDistributed(Dense(self.nb_words, activation='tanh'))#softmax is applied in the seq2seqloss by tf
+        h_decoded = decoder_h(repeated_context(encoded))
+        x_decoded_mean = decoder_mean(h_decoded)
+
+        class CustomVariationalLayer(Layer):
+            def __init__(self, max_len, batch_size, enableKL, **kwargs):
+                self.is_placeholder = True
+                super(CustomVariationalLayer, self).__init__(**kwargs)
+                self.target_weights = tf.constant(np.ones((batch_size, max_len)), tf.float32)
+                self.enableKL = enableKL
+            def vae_loss(self, x, x_decoded_mean):
+                labels = tf.cast(x, tf.int32)
+                xent_loss = K.sum(tf.contrib.seq2seq.sequence_loss(x_decoded_mean, labels, 
+                                                             weights=self.target_weights,
+                                                             average_across_timesteps=False,
+                                                             average_across_batch=False), axis=-1)
+                                                             #softmax_loss_function=softmax_loss_f), axis=-1)#, uncomment for sampled doftmax
+                kl_loss = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1) if self.enableKL else 0
+                # kl_loss = 0
+                return K.mean(xent_loss + kl_loss)
+
+            def call(self, inputs):
+                x = inputs[0]
+                x_decoded_mean = inputs[1]
+                loss = self.vae_loss(x, x_decoded_mean)
+                self.add_loss(loss, inputs=inputs)
+                # we don't use this output, but it has to have the correct shape:
+                return K.ones_like(x)
+        
+        
+        
+        
+        
+        loss_layer = CustomVariationalLayer(self.max_len, self.batch_size, self.enableKL)([input_layer, x_decoded_mean])
+        self.model = Model(input_layer, [loss_layer])
+        # optimizer = Adadelta(lr=2.)
+        self.model.compile(optimizer=self.optimizer, loss=[zero_loss])
+
+        # build a model to project inputs on the latent space
+        self.encoder = Model(outputs=z_mean, inputs=input_layer)
+
+
+#     def fit(self, train_X, val_X, nb_epoch=50, batch_size=100):
+#         optimizer = Adadelta(lr=2.)
+#         self.vae.compile(optimizer=optimizer, loss=self.vae_loss)
+
+#         self.vae.fit(train_X[0], train_X[1],
+#                 shuffle=True,
+#                 epochs=nb_epoch,
+#                 batch_size=batch_size,
+#                 validation_data=(val_X[0], val_X[1]),
+#                 callbacks=[ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
+#                             EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+#                             CustomModelCheckpoint(self.encoder, self.save_model, monitor='val_loss', save_best_only=True, mode='auto')
+#                         ]
+#                 )
+
+#         return self
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon
+
+
 # BPE version
 class KATE3D(object):
     """VarAutoEncoder for topic modeling.
@@ -1062,13 +1287,15 @@ class KATE3D(object):
 
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
-        embed_layer = emb
+        self.embed_layer = emb
+        self.embed_layer.mask_zero = True
+        # self.embed_layer.trainable = False
         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
 
 
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
-        h1 = embed_layer(input_layer)
+        h1 = self.embed_layer(input_layer)
         h1 = bilstm(h1)
         h1 = hidden_layer1(h1)
 
@@ -1076,10 +1303,10 @@ class KATE3D(object):
         self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
 
         if self.comp_topk != None:
-            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
+            self.z_mean_k = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
 
         # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
+        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean_k, self.z_log_var])
 
         # we instantiate these layers separately so as to reuse them later
         decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
@@ -1104,7 +1331,9 @@ class KATE3D(object):
         else:
             self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
         # build a model to project inputs on the latent space
+        # self.encoder = Model(outputs=[self.z_mean, self.z_log_var, encoded], inputs=input_layer)
         self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
 
 
         # build a digit generator that can sample from the learned distribution
@@ -1119,6 +1348,30 @@ class KATE3D(object):
 
         
            
+
+    def generate_output(self, x, y):
+
+        gen_x = np.argmax(self.model.predict(x), axis=-1)
+        gen_y = np.argmax(self.model.predict(y), axis=-1)
+
+        train = []
+        test = []
+        for i, j, k, l in zip(gen_x, gen_y, x, y):
+            gen_q = " ".join([self.index2word[t] for t in i])
+            gen_d = " ".join([self.index2word[t] for t in j])
+            real_q = " ".join([self.index2word[t] for t in k])
+            real_d = " ".join([self.index2word[t] for t in l])
+
+            train.append(sentence_bleu(real_q, gen_q))
+            test.append(sentence_bleu(real_d, gen_d))
+            # print("%s\t%s : %s\t%s\n" % (real_q, real_d, gen_q, gen_d))
+            # print("%s : %s\n" % (real_q, gen_q))
+            print(real_q)
+            print(gen_q)
+            print()
+        print(np.mean(train), np.mean(test))
+
+
 
                 
                 
@@ -1145,9 +1398,11 @@ class KATE3D(object):
 
 
     def vae_loss(self, x, x_decoded_mean):
+
         x = K.flatten(x)
         x_decoded_mean = K.flatten(x_decoded_mean)
         xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
+        # xent_loss = objectives.categorical_crossentropy(x, x_decoded_mean)
         kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
 
         return xent_loss + kl_loss
@@ -1161,9 +1416,10 @@ class KATE3D(object):
 
         return z_mean + K.exp(z_log_var / 2) * epsilon
 
-    def initModel(self, sp, bpe_dict):
+    def initModel(self, sp, bpe_dict, index2word):
         self.sp = sp
         self.bpe_dict = bpe_dict
+        self.index2word = index2word
 
     def batch_generator(self, reader, train_data, batch_size):
         while True:
@@ -1192,7 +1448,6 @@ class KATE3D(object):
                     
                     ones = np.ones(batch_size)
                     zeros = np.zeros(batch_size)
-
 
                     x_ = np.concatenate([q_real, q_fake])
                     y_ = np.concatenate([ones, zeros])
