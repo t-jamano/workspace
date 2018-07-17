@@ -26,8 +26,11 @@ import math
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
 from keras.models import model_from_json
+from keras.callbacks import Callback
 import sys, re
 import argparse
+from time import time
+
 
 
 # Pandas scripts
@@ -133,7 +136,7 @@ def get_reader(train_data, batch_size, path):
         # reader = pd.read_csv(train_data_dir, nrows=100000, names=["q"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "QueryQueryLog":
         # reader = pd.read_csv(train_data_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
-        reader = pd.read_csv(train_data_dir, nrows=50000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
+        reader = pd.read_csv(train_data_dir, nrows=5000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
     return reader
 
 
@@ -292,3 +295,159 @@ def ttest(res1, res2, metric="ndcg"):
 #             [model[] for i in texts]
 
 
+class CustomModelCheckpoint(Callback):
+    """Save the model after every epoch.
+    `filepath` can contain named formatting options,
+    which will be filled the value of `epoch` and
+    keys in `logs` (passed in `on_epoch_end`).
+    For example: if `filepath` is `weights.{epoch:02d}-{val_loss:.2f}.hdf5`,
+    then the model checkpoints will be saved with the epoch number and
+    the validation loss in the filename.
+    # Arguments
+        filepath: string, path to save the model file.
+        monitor: quantity to monitor.
+        verbose: verbosity mode, 0 or 1.
+        save_best_only: if `save_best_only=True`,
+            the latest best model according to
+            the quantity monitored will not be overwritten.
+        mode: one of {auto, min, max}.
+            If `save_best_only=True`, the decision
+            to overwrite the current save file is made
+            based on either the maximization or the
+            minimization of the monitored quantity. For `val_acc`,
+            this should be `max`, for `val_loss` this should
+            be `min`, etc. In `auto` mode, the direction is
+            automatically inferred from the name of the monitored quantity.
+        save_weights_only: if True, then only the model's weights will be
+            saved (`model.save_weights(filepath)`), else the full model
+            is saved (`model.save(filepath)`).
+        period: Interval (number of epochs) between checkpoints.
+    """
+
+    def __init__(self, custom_model, filepath, monitor='val_loss', verbose=0,
+                 save_best_only=False, save_weights_only=False,
+                 mode='auto', period=1):
+        super(CustomModelCheckpoint, self).__init__()
+        self.custom_model = custom_model
+        self.monitor = monitor
+        self.verbose = verbose
+        self.filepath = filepath
+        self.save_best_only = save_best_only
+        self.save_weights_only = save_weights_only
+        self.period = period
+        self.epochs_since_last_save = 0
+
+        if mode not in ['auto', 'min', 'max']:
+            warnings.warn('CustomModelCheckpoint mode %s is unknown, '
+                          'fallback to auto mode.' % (mode),
+                          RuntimeWarning)
+            mode = 'auto'
+
+        if mode == 'min':
+            self.monitor_op = np.less
+            self.best = np.Inf
+        elif mode == 'max':
+            self.monitor_op = np.greater
+            self.best = -np.Inf
+        else:
+            if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
+                self.monitor_op = np.greater
+                self.best = -np.Inf
+            else:
+                self.monitor_op = np.less
+                self.best = np.Inf
+
+    def on_epoch_end(self, epoch, logs=None):
+        model = self.custom_model
+        logs = logs or {}
+        self.epochs_since_last_save += 1
+        if self.epochs_since_last_save >= self.period:
+            self.epochs_since_last_save = 0
+            filepath = self.filepath.format(epoch=epoch, **logs)
+            if self.save_best_only:
+                current = logs.get(self.monitor)
+                if current is None:
+                    warnings.warn('Can save best model only with %s available, '
+                                  'skipping.' % (self.monitor), RuntimeWarning)
+                else:
+                    if self.monitor_op(current, self.best):
+                        if self.verbose > 0:
+                            print('Epoch %05d: %s improved from %0.5f to %0.5f,'
+                                  ' saving model to %s'
+                                  % (epoch, self.monitor, self.best,
+                                     current, filepath))
+                        self.best = current
+                        if self.save_weights_only:
+                            model.save_weights(filepath, overwrite=True)
+                        else:
+                            model.save(filepath, overwrite=True)
+                    else:
+                        if self.verbose > 0:
+                            print('Epoch %05d: %s did not improve' %
+                                  (epoch, self.monitor))
+            else:
+                if self.verbose > 0:
+                    print('Epoch %05d: saving model to %s' % (epoch, filepath))
+                if self.save_weights_only:
+                    model.save_weights(filepath, overwrite=True)
+                else:
+                    model.save(filepath, overwrite=True)
+
+
+class EvaluationCheckpoint(Callback):
+    
+    def __init__(self, run, cosine, test_set, model_name, path, graph):
+        super(EvaluationCheckpoint, self).__init__()
+        
+        self.run = run
+        self.cosine = cosine
+        self.test_set = test_set
+        self.model_name = model_name
+        self.path = path
+        self.graph = graph
+
+
+    def on_epoch_begin(self, batch, logs={}):
+        self.epoch_time_start = time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        
+        # print(logs)
+        with self.graph.as_default():
+
+            loss = logs.get("loss")
+            val_loss = logs.get("val_loss")
+
+            may_ndcg, june_ndcg, july_auc = evaluate(self.run, self.cosine, self.test_set, self.model_name)
+            print_output = '%s, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (self.run.name(), epoch, time() - self.epoch_time_start, may_ndcg, june_ndcg, july_auc, loss, val_loss)
+
+            print(print_output)
+            with open("%sdata/out/%s" % (self.path, self.model_name), "a") as myfile:
+                myfile.write(print_output)
+
+
+class KL_Annealing(Callback):
+    
+    def __init__(self, run):
+        super(KL_Annealing, self).__init__()
+        
+        self.run = run
+        self.kl_inc_rate = 1 / 5000. # set the annealing rate for KL loss
+        self.cos_inc_rate = 1
+        self.max_cos_weight = 150.
+        self.max_kl_weight = 1.
+
+    def on_epoch_end(self, epoch, logs=None):
+
+        if hasattr(self.run, 'loss_layer'):
+            self.run.loss_layer.kl_weight = min(self.run.loss_layer.kl_weight + self.kl_inc_rate, self.max_kl_weight)
+            # self.run.cos_weight = min(self.run.cos_weight + self.cos_inc_rate, self.max_cos_weight)
+
+class TimeHistory(Callback):
+    def on_train_begin(self, logs={}):
+        self.times = []
+
+    
+
+    def on_epoch_end(self, batch, logs={}):
+        self.times.append()

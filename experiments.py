@@ -3,7 +3,6 @@ from Models import *
 from FastModels import *
 from BatchGenerator import *
 import datetime
-from time import time
 
 #################### Arguments ####################
 def parse_args():
@@ -146,10 +145,27 @@ if __name__ == '__main__':
 		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 	elif model == "kate2":
 		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
+	
+
+
+
+
 	elif model == "vdsh":
 		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+		run.encoder._make_predict_function()
+		graph = tf.get_default_graph()
 	elif model == "vdsh_kate":
 		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+		
+
+
+
+
+
+
+
+
+
 
 	elif model == "kate1_bpe":
 		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim])
@@ -197,7 +213,8 @@ if __name__ == '__main__':
 		graph = tf.get_default_graph()
 			
 
-
+	run.encoder._make_predict_function()
+	graph = tf.get_default_graph()
 
 	model_name = "%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name, train_data, date_time)
 
@@ -256,7 +273,7 @@ if __name__ == '__main__':
 		y_val = x_val
 
 		print("Train %d : Val %d" % (len(x_train), len(x_val)))
-	elif "vdsh" in model:
+	elif "vdsh" in model or "dssm" in model:
 
 		reader = get_reader(train_data, batch_size, path)
 		idx = int(len(reader) - ( len(reader) % batch_size))
@@ -269,25 +286,39 @@ if __name__ == '__main__':
 		q_val = parse_texts_bpe(reader.q.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
 		d_val = parse_texts_bpe(reader.d.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
 
-		idx = np.arange(len(q_train))
-		shuffle(idx)
-		q_train = np.concatenate([q_train, q_train])
-		d_train = np.concatenate([d_train, d_train[idx]])
 
-		idx = np.arange(len(q_val))
-		shuffle(idx)
-		q_val = np.concatenate([q_val, q_val])
-		d_val = np.concatenate([d_val, d_val[idx]])
+		idx_train = np.arange(len(q_train))
+		shuffle(idx_train)
+
+		idx_val = np.arange(len(q_val))
+		shuffle(idx_val)
 
 
-		x_train = [q_train, d_train]
-		y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
-		print(len(y_train))
-		for i in y_train:
-			print(i.shape)
+		if "dssm" in model:
 
-		x_val = [q_val, d_val]
-		y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
+			x_train = [q_train, d_train, d_train[idx_train]]
+			y_train = np.zeros((len(q_train), 2))
+			y_train[:, 0] = 1
+
+			x_val = [q_val, d_val, d_val[idx_val]]
+			y_val = np.zeros((len(q_val), 2))
+			y_val[:, 0] = 1
+		else:
+
+			q_train = np.concatenate([q_train, q_train])
+			d_train = np.concatenate([d_train, d_train[idx_train]])
+
+			idx = np.arange(len(q_val))
+			shuffle(idx)
+
+			q_val = np.concatenate([q_val, q_val])
+			d_val = np.concatenate([d_val, d_val[idx_val]])
+
+			x_train = [q_train, d_train]
+			y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
+
+			x_val = [q_val, d_val]
+			y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
 
 		# print("Train %d : Val %d" % (len(x_train), len(x_val)))
 
@@ -295,44 +326,36 @@ if __name__ == '__main__':
 	print("============Start Training================")
 	cosine = CosineSim(latent_dim)
 
-	best_auc_score = 0
 
-	iterations = int(train_data_size[train_data] / batch_size)
-	for epoch in range(epochs):		
+	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2", "dssm"]:
+		try:
+			hist = run.model.fit(x_train, y_train,
+						        shuffle=True,
+						        epochs=2,
+						        verbose=0,
+						        batch_size=batch_size,
+						        validation_data=(x_val, y_val),
+						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
+						                    # TQDMCallback(),
+						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+						                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+						                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+						                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
+						                    KL_Annealing(run)
+						                  ]
+						        )
+		except Exception as e:
+				print(e)
+				pass
+	else:
+
+		best_auc_score = 0
+
+		iterations = int(train_data_size[train_data] / batch_size)
+		for epoch in range(epochs):		
 
 
-
-		if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2"]:
-			try:
-				t1 = time()
-				hist = run.model.fit(x_train, y_train, epochs=1, verbose=0, batch_size=batch_size, validation_data=(x_val, y_val))       
-				t2 = time()
-				losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
-
-				may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
-
-
-				print_output = '%s_a%.1f_k%d, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, Val_Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], hist.history['val_loss'][-1], time()-t2)
-				file_output = '%s_a%.1f_k%d, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
-
-				print(print_output)
-				with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
-					myfile.write(file_output)
-
-
-
-				if july_auc > best_auc_score:
-					best_auc_score = july_auc
-					run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
-					run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
-
-			except Exception as e:
-					print(e)
-					pass
-
-# 		Run models that cannot fit all training dataset into memory here
-		else:
-
+	# 		Run models that cannot fit all training dataset into memory
 			# restart the reader thread
 			reader = get_reader(train_data, batch_size, path)
 			reader2 = get_reader(train_data, batch_size, path)
@@ -352,15 +375,6 @@ if __name__ == '__main__':
 
 					else:
 						t1 = time()
-
-						# if "kate2_qd2" in model:
-						# 	pass
-						# elif "kate2_qd" in model:
-						# 	max_pred_weight = 150
-						# 	kl_inc = 1.0 / 5000
-						# 	pred_inc = 0.1
-						# 	run.kl_weight = min(run.kl_weight + kl_inc, 1.0)
-						# 	run.pred_weight = min(run.pred_weight + pred_inc, max_pred_weight)
 
 						hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
 						t2 = time()
@@ -391,12 +405,3 @@ if __name__ == '__main__':
 				except Exception as e:
 					print(e)
 					pass
-
-	# print("Finall Evalutation")
-	# may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
-	# str_output = 'May = %.4f, June = %.4f, July = %.4f \n' % (may_ndcg, june_ndcg, july_auc)
-	# print(str_output)
-	# with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
-	# 	myfile.write(str_output)
-
-		        	

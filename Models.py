@@ -19,6 +19,7 @@ from keras.engine import Layer
 from keras.layers.convolutional import Convolution1D
 from keras.layers.merge import concatenate, dot
 from keras.layers.advanced_activations import LeakyReLU
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 # from keras_tqdm import TQDMNotebookCallback
 # from keras_tqdm import TQDMCallback
 # from keras_adversarial.legacy import l1l2
@@ -2027,6 +2028,8 @@ class DSSM():
         self.num_negatives = num_negatives
         self.nb_words = nb_words
         self.max_len = max_len
+        self.enableSeparate = enableSeparate
+        
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
         query = Input(shape = (self.max_len,))
@@ -2079,6 +2082,9 @@ class DSSM():
 
         self.encoder = Model(inputs=query, outputs=query_sem)
 
+    def name(self):
+        return "dssm2" if self.enableSeparate else "dssm"
+
     def initModel(self, sp, bpe_dict):
         self.sp = sp
         self.bpe_dict = bpe_dict
@@ -2108,4 +2114,3 @@ class DSSM():
                 
                 
                 yield [q, d] + [neg[j] for j in range(self.num_negatives)], y
-

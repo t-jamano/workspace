@@ -55,6 +55,12 @@ class VDSH(object):
 
         self.build()
 
+    def name(self):
+        if self.ctype != None:
+            return "vdsh_kate_k%d" % self.comp_topk
+        else:
+            return "vdsh"
+
     def build(self):
         act = 'tanh'
         input_q = Input(shape=(self.max_len,))
@@ -98,8 +104,7 @@ class VDSH(object):
             encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([mean_q, var_q])
             encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([mean_d, var_d])
 
-#         self.cos_loss = Flatten()(merge([h1_q_cos, h1_d_cos], mode="cos"))
-        cos_output = Flatten()(merge([h1_q, h1_d], mode="cos"))
+        cos_output = Flatten(name="cos")(merge([h1_q, h1_d], mode="cos"))
 
         
         repeated_context = RepeatVector(self.max_len)
@@ -121,7 +126,7 @@ class VDSH(object):
 
         
         self.model = Model([input_q, input_d], [vae_output, cos_output])
-        self.model.compile(optimizer=self.optimizer, loss=[zero_loss, "binary_crossentropy"], loss_weights=[1, self.cos_weight])
+        self.model.compile(optimizer=self.optimizer, loss=[zero_loss, "cosine_proximity"], loss_weights=[1, self.cos_weight])
         # build a model to project inputs on the latent space
         self.encoder = Model(outputs=mean_q, inputs=input_q)
         
