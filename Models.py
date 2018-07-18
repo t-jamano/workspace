@@ -20,6 +20,7 @@ from keras.layers.convolutional import Convolution1D
 from keras.layers.merge import concatenate, dot
 from keras.layers.advanced_activations import LeakyReLU
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.callbacks import LambdaCallback
 # from keras_tqdm import TQDMNotebookCallback
 # from keras_tqdm import TQDMCallback
 # from keras_adversarial.legacy import l1l2
@@ -2021,7 +2022,7 @@ class CLSM():
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None, enableSeparate=False):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None, enableLSTM=False, enableSeparate=False):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -2029,7 +2030,7 @@ class DSSM():
         self.nb_words = nb_words
         self.max_len = max_len
         self.enableSeparate = enableSeparate
-        
+        self.enableLSTM = enableLSTM
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
         query = Input(shape = (self.max_len,))
@@ -2049,13 +2050,17 @@ class DSSM():
 
 
 
+        if self.enableLSTM:
+            query_sem = dense2(dense1(bilstm(embed_layer(query))))
+            pos_doc_sem = dense2(dense1(bilstm(embed_layer(pos_doc)))) if not enableSeparate else d_dense2(d_dense1(d_bilstm(d_embed_layer(pos_doc))))
+            neg_doc_sems = [dense2(dense1(bilstm(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [d_dense2(d_dense1(d_bilstm(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
+        else:
+            query_sem = dense2(dense1(GlobalMaxPooling1D()(embed_layer(query))))
+            pos_doc_sem = dense2(dense1(GlobalMaxPooling1D()(embed_layer(pos_doc)))) if not enableSeparate else dense2(dense1(GlobalMaxPooling1D()(d_embed_layer(pos_doc))))
+            neg_doc_sems = [dense2(dense1(GlobalMaxPooling1D()(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [dense2(dense1(GlobalMaxPooling1D()(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
 
-        query_sem = dense2(dense1(bilstm(embed_layer(query))))
 
 
-
-        pos_doc_sem = dense2(dense1(bilstm(embed_layer(pos_doc)))) if not enableSeparate else d_dense2(d_dense1(d_bilstm(d_embed_layer(pos_doc))))
-        neg_doc_sems = [dense2(dense1(bilstm(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [d_dense2(d_dense1(d_bilstm(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
 
         # This layer calculates the cosine similarity between the semantic representations of
         # a query and a document.
@@ -2083,7 +2088,10 @@ class DSSM():
         self.encoder = Model(inputs=query, outputs=query_sem)
 
     def name(self):
-        return "dssm2" if self.enableSeparate else "dssm"
+        if self.enableLSTM:
+            return "dssm_lstm2" if self.enableSeparate else "dssm_lstm"
+        else:
+            return "dssm2" if self.enableSeparate else "dssm"
 
     def initModel(self, sp, bpe_dict):
         self.sp = sp

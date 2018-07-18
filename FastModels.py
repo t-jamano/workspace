@@ -138,3 +138,101 @@ class VDSH(object):
                                   stddev=self.epsilon_std)
 
         return z_mean + K.exp(z_log_var / 2) * epsilon
+
+class VAE_LSTM(object):
+    
+    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), enableGAN=False, kl_weight=0):
+        self.dim = dim
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.emb = emb
+        self.enableGAN = enableGAN
+        self.optimizer = optimizer
+        self.kl_weight = kl_weight
+        
+        act = 'tanh'
+        input_layer = Input(shape=(self.max_len,))
+        self.embed_layer = emb
+        self.embed_layer.mask_zero = True
+        # self.embed_layer.trainable = False
+#         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
+        bilstm = LSTM(self.dim[0], unroll=True)
+
+
+        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        
+        h1 = self.embed_layer(input_layer)
+        h1 = bilstm(h1)
+        h1 = hidden_layer1(h1)
+
+        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
+
+        if self.comp_topk != None:
+            self.z_mean_k = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean_k, self.z_log_var])
+        else:
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
+
+
+        # we instantiate these layers separately so as to reuse them later
+        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
+        decoder_mean = Dense(self.nb_words, activation='softmax')
+
+        h_decoded = decoder_h(encoded)
+        h_decoded = RepeatVector(self.max_len)(h_decoded)
+        h_decoded = LSTM(self.dim[0], return_sequences=True, unroll=True)(h_decoded)
+        x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
+
+        if self.enableGAN:
+            self.discriminator = self.build_discriminator()
+            self.discriminator.compile(loss='binary_crossentropy',
+                optimizer=optimizer,
+                metrics=['accuracy'])
+
+            validity = self.discriminator(x_decoded_mean)
+
+        if self.enableGAN:
+            self.model = Model(outputs=[x_decoded_mean, validity], inputs=input_layer)
+        else:
+            self.model = Model(outputs=[x_decoded_mean, x_decoded_mean], inputs=input_layer)
+
+        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+
+        # build a digit generator that can sample from the learned distribution
+        decoder_input = Input(shape=(self.dim[1],))
+        _h_decoded = decoder_h(decoder_input)
+        _h_decoded = RepeatVector(self.max_len)(_h_decoded)
+        _h_decoded = LSTM(self.dim[0], return_sequences=True, unroll=True)(_h_decoded)
+        _x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(_h_decoded)
+
+        self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
+
+
+
+        if enableGAN:
+            self.model.compile(optimizer=self.optimizer, loss=[self.vae_loss, "binary_crossentropy"])
+        else:    
+            self.model.compile(optimizer=self.optimizer, loss=["sparse_categorical_crossentropy", self.kl_loss])
+
+    def name(self):
+        return "kate_lstm_k%d" % self.comp_topk if self.ctype != None else "vae_lstm"
+    def kl_loss(self, x, x_):
+
+        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+
+        return self.kl_weight * kl_loss
+
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=self.epsilon_std)
+
+        return z_mean + K.exp(z_log_var / 2) * epsilon

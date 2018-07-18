@@ -97,7 +97,8 @@ if __name__ == '__main__':
 
 	if optimizer == "adadelta":
 		optimizer = Adadelta(lr=2.)
-	
+	elif optimizer == "rmsprop":
+		optimizer = RMSprop(lr=0.01)
 
 	# load pre-trained tokeniser
 	if "BPE" in tokenise_name:
@@ -124,6 +125,12 @@ if __name__ == '__main__':
 	if model == "dssm2":
 		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer, enableSeparate=True)
 		run.initModel(sp, bpe_dict)
+	if model == "dssm_lstm":
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer, enableLSTM=True)
+		run.initModel(sp, bpe_dict)
+
+
+
 	elif model == "bilstm":
 		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=bpe.get_keras_embedding(True))
 		run.initModel(sp, bpe_dict)
@@ -139,6 +146,11 @@ if __name__ == '__main__':
 		#TODO Frozen or Trainable embedding option
 		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(True))
 		run.initModel(sp, bpe_dict)
+
+
+
+
+
 	elif model == "vae":
 		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 	elif model == "kate":
@@ -161,15 +173,13 @@ if __name__ == '__main__':
 
 
 
+	elif model == "vae_lstm":
+		run = VAE_LSTM(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], optimizer=optimizer)
+	elif model == "kate_lstm":
+		run = VAE_LSTM(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], optimizer=optimizer)
 
 
 
-
-
-
-	elif model == "kate1_bpe":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim])
-		run.initModel(sp, bpe_dict)
 	elif model == "kate2_bpe":
 		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict, bpe.index2word)
@@ -273,6 +283,13 @@ if __name__ == '__main__':
 		y_val = x_val
 
 		print("Train %d : Val %d" % (len(x_train), len(x_val)))
+
+	elif model in ["vae_lstm", "kate_lstm"]:
+
+		reader = get_reader(train_data, batch_size, path)
+		x_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
+
+		y_train =[np.expand_dims(x_train, axis=-1), np.expand_dims(x_train, axis=-1)]
 	elif "vdsh" in model or "dssm" in model:
 
 		reader = get_reader(train_data, batch_size, path)
@@ -327,14 +344,49 @@ if __name__ == '__main__':
 	cosine = CosineSim(latent_dim)
 
 
-	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2", "dssm"]:
+	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2", "dssm", "dssm2", "dssm_lstm"]:
+		# hist = run.model.fit(x_train, y_train,
+		# 				        shuffle=True,
+		# 				        epochs=2,
+		# 				        verbose=0,
+		# 				        batch_size=batch_size,
+		# 				        validation_data=(x_val, y_val),
+		# 				        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
+		# 				                    # TQDMCallback(),
+		# 				                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+		# 				                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+		# 				                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+		# 				                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
+		# 				                    KL_Annealing(run)
+		# 				                  ]
+		# 				        )
 		try:
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
-						        epochs=2,
+						        epochs=epochs,
 						        verbose=0,
 						        batch_size=batch_size,
 						        validation_data=(x_val, y_val),
+						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
+						                    # TQDMCallback(),
+						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+						                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+						                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+						                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
+						                    KL_Annealing(run)
+						                  ]
+						        )
+		except Exception as e:
+				print(e)
+				pass
+	elif model in ["vae_lstm", "kate_lstm"]:
+		try:
+			hist = run.model.fit(x_train, y_train,
+						        shuffle=True,
+						        epochs=epochs,
+						        verbose=0,
+						        batch_size=batch_size,
+						        validation_split=0.1,
 						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
 						                    # TQDMCallback(),
 						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
@@ -380,7 +432,7 @@ if __name__ == '__main__':
 						t2 = time()
 						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
 
-					may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set, model_name)
+					may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set)
 
 					# generate output
 					# run.generate_output(q_july, d_july)

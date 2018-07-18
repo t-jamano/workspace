@@ -89,7 +89,7 @@ def ranking_measure(qrel, pred):
 
     return ndcg_score, map_score
 
-def evaluate(run, cosine, test_set, model_name):
+def evaluate(run, cosine, test_set):
     may_ndcg, june_ndcg, july_auc = 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
@@ -103,19 +103,9 @@ def evaluate(run, cosine, test_set, model_name):
                 may_ndcg = ndcg_score
             elif test_data == "JuneFlower":
                 june_ndcg = ndcg_score
-            # print("NDCG: %f" % ndcg_score)
-            # print("MAP: %f" % map_score)
-            # save_pkl(pred, '/work/data/res/%s_%s_%f_%f.pkl' % (model_name, test_data, ndcg_score, map_score))  
-            # with open("/work/data/out/%s" % (model_name), "a") as myfile:
-            #     myfile.write("NDCG: %f\n" % ndcg_score)
-            #     myfile.write("MAP: %f\n" % map_score)
 
         elif test_data in ["JulyFlower"]:
             july_auc = auc(qrel, pred.flatten())
-            # print("AUC: %f" % auc_score)
-            # save_pkl(pred.flatten(), '/work/data/res/%s_%s_%f.pkl' % (model_name, test_data, auc_score))
-            # with open("/work/data/out/%s" % (model_name), "a") as myfile:
-            #     myfile.write("AUC: %f\n" % auc_score)
 
 
             
@@ -133,10 +123,10 @@ def get_reader(train_data, batch_size, path):
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0], names=["q"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "QueryLog":
         reader = pd.read_csv(train_data_dir, names=["q"], sep="\t", header=None, error_bad_lines=False)
-        # reader = pd.read_csv(train_data_dir, nrows=100000, names=["q"], sep="\t", header=None, error_bad_lines=False)
+        # reader = pd.read_csv(train_data_dir, nrows=1000, names=["q"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "QueryQueryLog":
-        # reader = pd.read_csv(train_data_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
-        reader = pd.read_csv(train_data_dir, nrows=5000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
+        reader = pd.read_csv(train_data_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
+        # reader = pd.read_csv(train_data_dir, nrows=5000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
     return reader
 
 
@@ -179,7 +169,7 @@ def parse_texts(texts, tokeniser, max_len):
 
     return x
 
-def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True):
+def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding='post'):
 
     x = []
     for text in texts:
@@ -199,7 +189,7 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True):
                 tmp.append(bpe_dict['<unk>'])
         x.append(tmp)
     
-    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len, padding='post')
+    return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len, padding=padding)
 
 
 def to_2D_one_hot(x, nb_words):
@@ -418,7 +408,7 @@ class EvaluationCheckpoint(Callback):
             loss = logs.get("loss")
             val_loss = logs.get("val_loss")
 
-            may_ndcg, june_ndcg, july_auc = evaluate(self.run, self.cosine, self.test_set, self.model_name)
+            may_ndcg, june_ndcg, july_auc = evaluate(self.run, self.cosine, self.test_set)
             print_output = '%s, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (self.run.name(), epoch, time() - self.epoch_time_start, may_ndcg, june_ndcg, july_auc, loss, val_loss)
 
             print(print_output)
@@ -438,16 +428,9 @@ class KL_Annealing(Callback):
         self.max_kl_weight = 1.
 
     def on_epoch_end(self, epoch, logs=None):
-
         if hasattr(self.run, 'loss_layer'):
             self.run.loss_layer.kl_weight = min(self.run.loss_layer.kl_weight + self.kl_inc_rate, self.max_kl_weight)
-            # self.run.cos_weight = min(self.run.cos_weight + self.cos_inc_rate, self.max_cos_weight)
+        elif hasattr(self.run, "kl_weight"):
+            self.run.kl_weight = min(self.run.kl_weight + self.kl_inc_rate, self.max_kl_weight)
+            self.run.model.compile(optimizer=self.run.optimizer, loss=["sparse_categorical_crossentropy", self.run.kl_loss])
 
-class TimeHistory(Callback):
-    def on_train_begin(self, logs={}):
-        self.times = []
-
-    
-
-    def on_epoch_end(self, batch, logs={}):
-        self.times.append()
