@@ -106,11 +106,18 @@ if __name__ == '__main__':
 		sp = spm.SentencePieceProcessor()
 		sp.Load('%sdata/bpe/en.wiki.bpe.op50000.model' % path)
 		bpe = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
-		bpe2 = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
-
+		bpe.index2word = [''] + bpe.index2word # add empty string
 		nb_words = len(bpe.index2word)
+		# word2index
 		bpe_dict = {bpe.index2word[i]: i for i in range(len(bpe.index2word))}
+		# construct embedding_matrix
+		embedding_matrix = np.concatenate([np.zeros((1, bpe.vector_size)), bpe.vectors]) # add zero vector for empty string (i.e. used for padding)
 
+		embedding_layer = Embedding(nb_words,
+                            embedding_matrix.shape[-1],
+                            weights=[embedding_matrix],
+                            input_length=max_len,
+                            trainable=True)
 
 	elif "trigram" in tokenise_name:
 
@@ -120,31 +127,31 @@ if __name__ == '__main__':
 	# =================================== Initiate Model ==============================================
 
 	if model == "dssm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	if model == "dssm2":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer, enableSeparate=True)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer, enableSeparate=True)
 		run.initModel(sp, bpe_dict)
 	if model == "dssm_lstm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, bpe.get_keras_embedding(True), optimizer=optimizer, enableLSTM=True)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer, enableLSTM=True)
 		run.initModel(sp, bpe_dict)
 
 
 
 	elif model == "bilstm":
-		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=bpe.get_keras_embedding(True))
+		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=embedding_layer)
 		run.initModel(sp, bpe_dict)
 	elif model == "bilstm2":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=bpe.get_keras_embedding(True))
+		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_layer)
 		run.initModel(sp, bpe_dict)
 	elif model == "bilstm2_cos":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=bpe.get_keras_embedding(True), mode="cos")
+		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_layer, mode="cos")
 		run.initModel(sp, bpe_dict)
 	elif model == "vae_dssm":
 		run = VAE_DSSM(hidden_dim, latent_dim, nb_words)	
 	elif model == "vae_bpe":
 		#TODO Frozen or Trainable embedding option
-		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, bpe.get_keras_embedding(True))
+		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, embedding_layer)
 		run.initModel(sp, bpe_dict)
 
 
@@ -152,70 +159,72 @@ if __name__ == '__main__':
 
 
 	elif model == "vae":
-		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 	elif model == "kate":
-		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 	elif model == "kate2":
-		run = VAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
+		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
 	
 
 
 
 
 	elif model == "vdsh":
-		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+		run = VDSH(nb_words, max_len, [embedding_layer, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "vdsh_kate":
-		run = VDSH(nb_words, max_len, [bpe.get_keras_embedding(True), bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+		run = VDSH(nb_words, max_len, [embedding_layer, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 		
+	elif model == "seqvae":
+		run = SeqVAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer, word_dropout_prob=0.5, kl_weight=0.0001)
 
 
 
 
 	elif model == "vae_lstm":
-		run = VAE_LSTM(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], optimizer=optimizer)
+		run = VAE_LSTM(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer)
 	elif model == "kate_lstm":
-		run = VAE_LSTM(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], optimizer=optimizer)
+		run = VAE_LSTM(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer)
 
 
 
 	elif model == "kate2_bpe":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp")
+		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict, bpe.index2word)
 	elif model == "kate2_bpeg":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "kate2_bpe_adam":
-		run = KATE3D(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
+		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "aae":
-		run = AAE(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp")
+		run = AAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd2":
-		run = VarAutoEncoderQD2(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD2(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd3_dssm":
-		run = VarAutoEncoderQD3(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD3(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdm":
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
 		run.initModel(sp, bpe_dict)
 	elif model in ["kate2_qdg1", "kate2_qdg2"]:
-		run = VarAutoEncoderQD(nb_words, max_len, bpe.get_keras_embedding(True), [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		if model == "kate2_qdg2":
 			run.discriminator.trainable = False
@@ -282,14 +291,22 @@ if __name__ == '__main__':
 		y_train = x_train
 		y_val = x_val
 
+
 		print("Train %d : Val %d" % (len(x_train), len(x_val)))
 
-	elif model in ["vae_lstm", "kate_lstm"]:
+	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
 
-		reader = get_reader(train_data, batch_size, path)
-		x_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
-
+		train_data_dir = '%sdata/train_data/%s.npy' % (path,train_data)
+		if os.path.exists(train_data_dir):
+			x_train = np.load(train_data_dir)
+		else:
+			reader = get_reader(train_data, path)
+			x_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
+		
 		y_train =[np.expand_dims(x_train, axis=-1), np.expand_dims(x_train, axis=-1)]
+		if model in ["seqvae", "seqvae2"]:
+			x_train = [x_train, x_train]
+
 	elif "vdsh" in model or "dssm" in model:
 
 		reader = get_reader(train_data, batch_size, path)
@@ -345,21 +362,6 @@ if __name__ == '__main__':
 
 
 	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2", "dssm", "dssm2", "dssm_lstm"]:
-		# hist = run.model.fit(x_train, y_train,
-		# 				        shuffle=True,
-		# 				        epochs=2,
-		# 				        verbose=0,
-		# 				        batch_size=batch_size,
-		# 				        validation_data=(x_val, y_val),
-		# 				        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
-		# 				                    # TQDMCallback(),
-		# 				                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
-		# 				                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-		# 				                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-		# 				                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
-		# 				                    KL_Annealing(run)
-		# 				                  ]
-		# 				        )
 		try:
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
@@ -379,14 +381,15 @@ if __name__ == '__main__':
 		except Exception as e:
 				print(e)
 				pass
-	elif model in ["vae_lstm", "kate_lstm"]:
+
+	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
 		try:
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
 						        epochs=epochs,
 						        verbose=0,
 						        batch_size=batch_size,
-						        validation_split=0.1,
+						        validation_split=0.2,
 						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
 						                    # TQDMCallback(),
 						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),

@@ -156,18 +156,18 @@ class VAE_LSTM(object):
         
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
+        e_mask = Masking(mask_value=0)
+
         self.embed_layer = emb
-        self.embed_layer.mask_zero = True
-        # self.embed_layer.trainable = False
 #         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-        bilstm = LSTM(self.dim[0], unroll=True)
+        bilstm = GRU(self.dim[0], return_state=True)
 
 
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
-        h1 = self.embed_layer(input_layer)
-        h1 = bilstm(h1)
-        h1 = hidden_layer1(h1)
+        h1 = e_mask(self.embed_layer(input_layer))
+        _, h1 = bilstm(h1)
+        # h1 = hidden_layer1(h1)
 
         self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
         self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
@@ -186,7 +186,7 @@ class VAE_LSTM(object):
 
         h_decoded = decoder_h(encoded)
         h_decoded = RepeatVector(self.max_len)(h_decoded)
-        h_decoded = LSTM(self.dim[0], return_sequences=True, unroll=True)(h_decoded)
+        h_decoded = GRU(self.dim[0], return_sequences=True)(h_decoded)
         x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
 
         if self.enableGAN:
@@ -236,3 +236,109 @@ class VAE_LSTM(object):
                                   stddev=self.epsilon_std)
 
         return z_mean + K.exp(z_log_var / 2) * epsilon
+
+
+class SeqVAE(object):
+    
+    def __init__(self, nb_words, max_len, embedding_layer, dim, optimizer=RMSprop(), word_dropout_prob=0.5, kl_weight=0):
+        self.dim = dim
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.embedding_layer = embedding_layer
+        self.optimizer = optimizer
+        self.kl_weight = kl_weight
+        self.word_dropout_prob = word_dropout_prob
+        
+        self.build()
+        
+    def build(self):
+                
+#       Encoder
+        
+        e_input = Input(shape=(self.max_len,))
+        e_mask = Masking(mask_value=0)
+        e_emb = self.embedding_layer
+        e_lstm = GRU(self.dim[0], return_state=True)
+        
+#         h, state_h, state_c = e_lstm(e_emb(e_mask(e_input)))#         
+        _, h = e_lstm(e_mask(e_emb(e_input)))
+
+        
+        mean = Dense(self.dim[1])
+        var = Dense(self.dim[1])
+        
+#         self.state_h_mean = mean(state_h)
+#         self.state_h_log_var = var(state_h)
+        
+#         self.state_c_mean = mean(state_c)
+#         self.state_c_log_var = var(state_c)
+        
+        self.h_mean = mean(h)
+        self.h_log_var = var(h)
+        
+#         state_h_z = Lambda(self.sampling)([self.state_h_mean, self.state_h_log_var])     
+#         state_c_z = Lambda(self.sampling)([self.state_c_mean, self.state_c_log_var])
+        z = Lambda(self.sampling)([self.h_mean, self.h_log_var])
+
+#         self.encoder = Model(e_input, self.state_h_mean)
+        self.encoder = Model(e_input, self.h_mean)
+        self.encoder2 = Model(e_input, z)
+
+        
+#       Decoder
+
+        d_input = Input(shape=(self.max_len,))
+        d_latent2hidden = Dense(self.dim[0])
+        d_lstm = GRU(self.dim[0], return_sequences=True)
+        d_output2vocab = TimeDistributed(Dense(self.nb_words, activation="softmax"))
+
+
+#         state_h_z = d_latent2hidden(state_h_z)
+#         state_c_z = d_latent2hidden(state_c_z)
+        h_z = d_latent2hidden(z)
+        
+        d_embed_input = e_emb(Dropout(self.word_dropout_prob)(d_input))
+#         d_embed_input = e_emb(d_input)
+
+#         outputs = d_lstm(d_embed_input, initial_state=[state_h_z, state_c_z])        
+        outputs = d_lstm(d_embed_input, initial_state=[h_z])
+
+        pred = d_output2vocab(outputs)
+
+        
+        
+#       VAE model
+        self.model = Model(inputs=[e_input, d_input], outputs=[pred, pred])
+        self.model.compile(optimizer=self.optimizer, loss=["sparse_categorical_crossentropy", self.kl_loss])
+
+
+
+
+    def name(self):
+        
+        return "seqvae"
+    
+    def kl_loss(self, x, x_):
+#         x = K.flatten(x)
+#         x_ = K.flatten(x_)
+#         x = tf.cast(x, tf.int32)
+
+#         rec_loss = objectives.sparse_categorical_crossentropy(x,x_)
+
+#         state_h_kl_loss = - 0.5 * K.sum(1 + self.state_h_log_var - K.square(self.state_h_mean) - K.exp(self.state_h_log_var), axis=-1)
+#         state_c_kl_loss = - 0.5 * K.sum(1 + self.state_c_log_var - K.square(self.state_c_mean) - K.exp(self.state_c_log_var), axis=-1)
+        
+#         return (self.kl_weight * state_h_kl_loss) + (self.kl_weight * state_c_kl_loss)
+        kl_loss = - 0.5 * K.sum(1 + self.h_log_var - K.square(self.h_mean) - K.exp(self.h_log_var), axis=-1)
+        return (self.kl_weight * kl_loss) 
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
+                                  stddev=1)
+    
+        return z_mean + K.exp(z_log_var / 2) * epsilon 
+    
+    def nosampling(self, args):
+        z_mean, z_log_var = args
+        return z_mean + K.exp(z_log_var / 2)

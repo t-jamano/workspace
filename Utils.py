@@ -23,11 +23,12 @@ import numpy as np
 import pickle
 import scipy.stats
 import math
+from nltk.translate.bleu_score import sentence_bleu
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
 from keras.models import model_from_json
 from keras.callbacks import Callback
-import sys, re
+import sys, re, os, os.path
 import argparse
 from time import time
 
@@ -113,10 +114,11 @@ def evaluate(run, cosine, test_set):
     return may_ndcg, june_ndcg, july_auc
 
 
-def get_reader(train_data, batch_size, path):
+def get_reader(train_data, path, iterator=False, batch_size=256):
     train_data_dir = '%sdata/train_data/%s' % (path,train_data)
     if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower2.txt"]:
-        reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
+        # reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
+        reader = pd.read_csv(train_data_dir, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "100M_query":
@@ -140,6 +142,34 @@ def sent_generator(reader, tokeniser, batch_size, max_len, feature_num):
         
         
         yield q, q_one_hot
+
+
+def generate_output(model, bpe, x, nrows=None, idx=None):
+
+    gen_x = np.argmax(model.predict(x), axis=-1) if idx == None else np.argmax(model.predict(x)[idx], axis=-1)
+
+    bleu = []
+    results = ""
+    for i, k in zip(gen_x, x):
+        gen_x = " ".join([bpe.index2word[t] for t in i])
+        real_x = " ".join([bpe.index2word[t] for t in k])
+
+        bleu.append(sentence_bleu(real_x, gen_x))
+        
+        real_x = real_x.replace("▁the", "")
+        real_x = real_x.replace("▁","")
+        gen_x = gen_x.replace("▁the", "")
+        gen_x = gen_x.replace("▁","")
+        if nrows != None:
+            if nrows == 0:
+                break
+            else:
+                nrows = nrows - 1
+        
+        results = results + "%s : %s\n\n" % (real_x, gen_x)
+    print("BLEU: %.4f" % np.mean(bleu))
+    print(results)
+
 
 def get_test_data(filename, path):
 
@@ -169,7 +199,7 @@ def parse_texts(texts, tokeniser, max_len):
 
     return x
 
-def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding='post'):
+def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding='pre'):
 
     x = []
     for text in texts:
@@ -178,15 +208,18 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding=
         # with 30M_QD_lower2.txt we dont need these lines
         # text = text.lower()
         # text = re.sub(r'\W+', ' ', text)
-
-        for t in sp.EncodeAsPieces(text):
-            if not isinstance(t, str):
-                t = str(t, "utf-8")
-            
-            if t in bpe_dict:
-                tmp.append(bpe_dict[t])
-            else:
-                tmp.append(bpe_dict['<unk>'])
+        try:
+            for t in sp.EncodeAsPieces(text):
+                if not isinstance(t, str):
+                    t = str(t, "utf-8")
+                
+                if t in bpe_dict:
+                    tmp.append(bpe_dict[t])
+                else:
+                    tmp.append(bpe_dict['<unk>'])
+        except Exception as e:
+                print(e)
+                pass
         x.append(tmp)
     
     return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len, padding=padding)
@@ -398,6 +431,7 @@ class EvaluationCheckpoint(Callback):
 
 
     def on_epoch_begin(self, batch, logs={}):
+
         self.epoch_time_start = time()
 
     def on_epoch_end(self, epoch, logs=None):

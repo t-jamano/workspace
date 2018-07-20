@@ -8,7 +8,7 @@ K.set_session(session)
 
 from Utils import *
 from random import shuffle
-from keras.layers import Bidirectional, Dense, Embedding, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
+from keras.layers import Bidirectional, Dense, Embedding, GRU, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
 from keras.layers.advanced_activations import ELU
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam, SGD, RMSprop, Adadelta
@@ -21,8 +21,8 @@ from keras.layers.merge import concatenate, dot
 from keras.layers.advanced_activations import LeakyReLU
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.callbacks import LambdaCallback
-# from keras_tqdm import TQDMNotebookCallback
-# from keras_tqdm import TQDMCallback
+from keras_tqdm import TQDMNotebookCallback
+from keras_tqdm import TQDMCallback
 # from keras_adversarial.legacy import l1l2
 # from keras_adversarial import AdversarialModel, fix_names, n_choice
 # from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling
@@ -1290,7 +1290,6 @@ class KATE3D(object):
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
         self.embed_layer = emb
-        self.embed_layer.mask_zero = True
         # self.embed_layer.trainable = False
         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
 
@@ -1603,7 +1602,7 @@ class BiLSTM():
         q_input = Input(shape=(self.q_max_len,))
         d_input = Input(shape=(self.d_max_len,))
         
-        q_emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
+        q_emb = emb
         q_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
         q_dense1 = Dense(hidden_dim, activation = "tanh")
         q_dense2 = Dense(latent_dim, activation = "tanh")
