@@ -1290,6 +1290,8 @@ class KATE3D(object):
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
         self.embed_layer = emb
+        e_mask = Masking(mask_value=0)
+
         # self.embed_layer.trainable = False
         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
 
@@ -1297,7 +1299,7 @@ class KATE3D(object):
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
         h1 = self.embed_layer(input_layer)
-        h1 = bilstm(h1)
+        h1 = bilstm(e_mask(h1))
         h1 = hidden_layer1(h1)
 
         self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
@@ -1559,7 +1561,8 @@ class LSTM_Model():
         self.nb_words = nb_words
         q_input = Input(shape=(max_len,))
         d_input = Input(shape=(max_len,))
-        
+        mask = Masking(mask_value=0)
+
         emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
 
         bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
@@ -1568,17 +1571,20 @@ class LSTM_Model():
         dense2 = Dense(latent_dim, activation = "tanh")
 
 
-        self.q_embed = dense2(dense1(bilstm(emb(q_input))))
-        self.d_embed = dense2(dense1(bilstm(emb(d_input))))
+        self.q_embed = dense2(dense1(bilstm(mask(emb(q_input)))))
+        self.d_embed = dense2(dense1(bilstm(mask(emb(d_input)))))
 
-        concat = Concatenate()([self.q_embed, self.d_embed])
+        concat = merge([self.q_embed, self.d_embed], mode="cos")
 
         pred = Dense(1, activation='sigmoid')(concat)
 
         self.encoder = Model(inputs=q_input, outputs=self.q_embed)
 
         self.model = Model(inputs=[q_input, d_input], outputs=pred)
-        self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+        self.model.compile(loss='binary_crossentropy', optimizer='RMSprop', metrics=['accuracy'])
+
+    def name(self):
+        return "bilstm"
 
     def initModel(self, sp, bpe_dict):
         self.sp = sp
@@ -1594,14 +1600,15 @@ class LSTM_Model():
                 yield [q,d], df.label.values
 
 class BiLSTM():
-    def __init__(self, hidden_dim=300, latent_dim=128, q_max_len=10, d_max_len=15, emb_dim=200, nb_words=50000, emb=None, mode="concat"):
+    def __init__(self, hidden_dim=300, latent_dim=128, q_max_len=10, d_max_len=15, emb_dim=200, nb_words=50000, emb=None, mode="cos", optimizer=RMSprop()):
 
         self.q_max_len = q_max_len
         self.d_max_len = d_max_len
         self.nb_words = nb_words
         q_input = Input(shape=(self.q_max_len,))
         d_input = Input(shape=(self.d_max_len,))
-        
+        mask = Masking(mask_value=0)
+
         q_emb = emb
         q_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
         q_dense1 = Dense(hidden_dim, activation = "tanh")
@@ -1613,10 +1620,10 @@ class BiLSTM():
         d_dense2 = Dense(latent_dim, activation = "tanh")
 
 
-        self.q_embed = q_dense2(q_dense1(q_bilstm(q_emb(q_input))))
-        self.d_embed = d_dense2(d_dense1(d_bilstm(d_emb(d_input))))
+        self.q_embed = q_dense2(q_dense1(q_bilstm(mask(q_emb(q_input)))))
+        self.d_embed = d_dense2(d_dense1(d_bilstm(mask(d_emb(d_input)))))
 
-        combine = merge([self.q_embed, self.d_embed], mode=mode)
+        combine = Flatten()(merge([self.q_embed, self.d_embed], mode=mode))
 
         pred = Dense(1, activation='sigmoid')(combine)
 
@@ -1627,7 +1634,7 @@ class BiLSTM():
         self.model = Model(inputs=[q_input, d_input], outputs=pred)
         # self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
         
-        self.model.compile(loss='binary_crossentropy', optimizer=Adadelta(lr=2.), metrics=['accuracy'])
+        self.model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
 
     def initModel(self, sp, bpe_dict):
@@ -2021,7 +2028,7 @@ class CLSM():
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, emb=None, optimizer=None, enableLSTM=False, enableSeparate=False):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -2030,33 +2037,36 @@ class DSSM():
         self.max_len = max_len
         self.enableSeparate = enableSeparate
         self.enableLSTM = enableLSTM
+        mask = Masking(mask_value=0)
+
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
         query = Input(shape = (self.max_len,))
         pos_doc = Input(shape = (self.max_len,))
         neg_docs = [Input(shape = (self.max_len,)) for j in range(self.num_negatives)]
 
-        embed_layer = emb
-        bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
-        dense1 = Dense(self.hidden_dim, activation = "tanh")
-        dense2 = Dense(self.latent_dim, activation = "tanh")
+        embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    trainable=True)
+        
+        bilstm = LSTM(hidden_dim, name='lstm_1', return_sequences=False)
 
         if enableSeparate:
-            d_embed_layer = emb
-            d_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
-            d_dense1 = Dense(self.hidden_dim, activation = "tanh")
-            d_dense2 = Dense(self.latent_dim, activation = "tanh")
+            d_embed_layer = emb2
+            d_bilstm = LSTM(hidden_dim, name='lstm_1')
 
 
 
         if self.enableLSTM:
-            query_sem = dense2(dense1(bilstm(embed_layer(query))))
-            pos_doc_sem = dense2(dense1(bilstm(embed_layer(pos_doc)))) if not enableSeparate else d_dense2(d_dense1(d_bilstm(d_embed_layer(pos_doc))))
-            neg_doc_sems = [dense2(dense1(bilstm(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [d_dense2(d_dense1(d_bilstm(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
+            query_sem = bilstm(mask(embed_layer(query)))
+            pos_doc_sem = bilstm(mask(embed_layer(pos_doc))) if not enableSeparate else d_bilstm(mask(d_embed_layer(pos_doc)))
+            neg_doc_sems = [bilstm(mask(embed_layer(neg_doc))) for neg_doc in neg_docs] if not enableSeparate else [d_bilstm(mask(d_embed_layer(neg_doc))) for neg_doc in neg_docs]
         else:
-            query_sem = dense2(dense1(GlobalMaxPooling1D()(embed_layer(query))))
-            pos_doc_sem = dense2(dense1(GlobalMaxPooling1D()(embed_layer(pos_doc)))) if not enableSeparate else dense2(dense1(GlobalMaxPooling1D()(d_embed_layer(pos_doc))))
-            neg_doc_sems = [dense2(dense1(GlobalMaxPooling1D()(embed_layer(neg_doc)))) for neg_doc in neg_docs] if not enableSeparate else [dense2(dense1(GlobalMaxPooling1D()(d_embed_layer(neg_doc)))) for neg_doc in neg_docs]
+            query_sem = GlobalMaxPooling1D()(embed_layer(query))
+            pos_doc_sem = GlobalMaxPooling1D()(embed_layer(pos_doc)) if not enableSeparate else GlobalMaxPooling1D()(d_embed_layer(pos_doc))
+            neg_doc_sems = [GlobalMaxPooling1D()(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [GlobalMaxPooling1D()(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
 
 
 

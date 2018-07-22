@@ -38,10 +38,10 @@ class VDSH_Loss_Layer(Layer):
 class VDSH(object):
     
 
-    def __init__(self, input_size, max_len, emb, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, cos_weight=1):
+    def __init__(self, input_size, max_len, embedding_matrix, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, cos_weight=1):
         self.input_size = input_size
         self.dim = dim
-        self.emb = emb
+        self.embedding_matrix = embedding_matrix
         self.comp_topk = comp_topk
         self.ctype = ctype
         self.epsilon_std = epsilon_std
@@ -68,16 +68,30 @@ class VDSH(object):
 
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         hidden_layer1_cos = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
+
+        embedding_layer = Embedding(nb_words,
+                            embedding_matrix.shape[-1],
+                            weights=[self.embedding_matrix],
+                            input_length=max_len,
+                            trainable=True)
+
+        q_embedding_layer = Embedding(nb_words,
+                            embedding_matrix.shape[-1],
+                            weights=[self.embedding_matrix],
+                            input_length=max_len,
+                            trainable=True)
         
-        embed_q = GlobalMaxPooling1D()(self.emb[0](input_q))
-        embed_d = GlobalMaxPooling1D()(self.emb[0](input_d))
+        embed_q = GlobalMaxPooling1D()(embedding_layer(input_q))
+        embed_d = GlobalMaxPooling1D()(embedding_layer(input_d))
 
         h1_q = hidden_layer1(embed_q)
         h1_d = hidden_layer1(embed_d)
+
+
         
         
-        embed_q_cos = GlobalMaxPooling1D()(self.emb[1](input_q))
-        embed_d_cos = GlobalMaxPooling1D()(self.emb[1](input_d))
+        embed_q_cos = GlobalMaxPooling1D()(q_embedding_layer(input_q))
+        embed_d_cos = GlobalMaxPooling1D()(q_embedding_layer(input_d))
 
         h1_q_cos = hidden_layer1_cos(embed_q_cos)
         h1_d_cos = hidden_layer1_cos(embed_d_cos)
@@ -141,7 +155,7 @@ class VDSH(object):
 
 class VAE_LSTM(object):
     
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), enableGAN=False, kl_weight=0):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), enableGAN=False, kl_weight=0):
         self.dim = dim
         self.comp_topk = comp_topk
         self.ctype = ctype
@@ -149,7 +163,7 @@ class VAE_LSTM(object):
 
         self.nb_words = nb_words
         self.max_len = max_len
-        self.emb = emb
+        self.embedding_matrix = embedding_matrix
         self.enableGAN = enableGAN
         self.optimizer = optimizer
         self.kl_weight = kl_weight
@@ -158,14 +172,20 @@ class VAE_LSTM(object):
         input_layer = Input(shape=(self.max_len,))
         e_mask = Masking(mask_value=0)
 
-        self.embed_layer = emb
+
+        embedding_layer = Embedding(nb_words,
+                            embedding_matrix.shape[-1],
+                            weights=[self.embedding_matrix],
+                            input_length=max_len,
+                            trainable=True)
+
 #         bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
         bilstm = GRU(self.dim[0], return_state=True)
 
 
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
-        h1 = e_mask(self.embed_layer(input_layer))
+        h1 = e_mask(embedding_layer(input_layer))
         _, h1 = bilstm(h1)
         # h1 = hidden_layer1(h1)
 
@@ -240,11 +260,11 @@ class VAE_LSTM(object):
 
 class SeqVAE(object):
     
-    def __init__(self, nb_words, max_len, embedding_layer, dim, optimizer=RMSprop(), word_dropout_prob=0.5, kl_weight=0):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=RMSprop(), word_dropout_prob=0.5, kl_weight=0):
         self.dim = dim
         self.nb_words = nb_words
         self.max_len = max_len
-        self.embedding_layer = embedding_layer
+        self.embedding_matrix = embedding_matrix
         self.optimizer = optimizer
         self.kl_weight = kl_weight
         self.word_dropout_prob = word_dropout_prob
@@ -257,11 +277,18 @@ class SeqVAE(object):
         
         e_input = Input(shape=(self.max_len,))
         e_mask = Masking(mask_value=0)
-        e_emb = self.embedding_layer
+
+        embedding_layer = Embedding(nb_words,
+                            embedding_matrix.shape[-1],
+                            weights=[self.embedding_matrix],
+                            input_length=max_len,
+                            trainable=True)
+
+
         e_lstm = GRU(self.dim[0], return_state=True)
         
 #         h, state_h, state_c = e_lstm(e_emb(e_mask(e_input)))#         
-        _, h = e_lstm(e_mask(e_emb(e_input)))
+        _, h = e_lstm(e_mask(embedding_layer(e_input)))
 
         
         mean = Dense(self.dim[1])
@@ -297,7 +324,7 @@ class SeqVAE(object):
 #         state_c_z = d_latent2hidden(state_c_z)
         h_z = d_latent2hidden(z)
         
-        d_embed_input = e_emb(Dropout(self.word_dropout_prob)(d_input))
+        d_embed_input = embedding_layer(Dropout(self.word_dropout_prob)(d_input))
 #         d_embed_input = e_emb(d_input)
 
 #         outputs = d_lstm(d_embed_input, initial_state=[state_h_z, state_c_z])        

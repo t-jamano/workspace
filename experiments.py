@@ -113,11 +113,8 @@ if __name__ == '__main__':
 		# construct embedding_matrix
 		embedding_matrix = np.concatenate([np.zeros((1, bpe.vector_size)), bpe.vectors]) # add zero vector for empty string (i.e. used for padding)
 
-		embedding_layer = Embedding(nb_words,
-                            embedding_matrix.shape[-1],
-                            weights=[embedding_matrix],
-                            input_length=max_len,
-                            trainable=True)
+		
+
 
 	elif "trigram" in tokenise_name:
 
@@ -127,31 +124,33 @@ if __name__ == '__main__':
 	# =================================== Initiate Model ==============================================
 
 	if model == "dssm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	if model == "dssm2":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer, enableSeparate=True)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, embedding_matrix2, optimizer=optimizer, enableSeparate=True)
 		run.initModel(sp, bpe_dict)
 	if model == "dssm_lstm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_layer, optimizer=optimizer, enableLSTM=True)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True)
 		run.initModel(sp, bpe_dict)
 
 
 
 	elif model == "bilstm":
-		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=embedding_layer)
+		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=embedding_matrix)
 		run.initModel(sp, bpe_dict)
 	elif model == "bilstm2":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_layer)
+		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_matrix)
 		run.initModel(sp, bpe_dict)
 	elif model == "bilstm2_cos":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_layer, mode="cos")
+		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_matrix, mode="cos")
 		run.initModel(sp, bpe_dict)
+	
+
 	elif model == "vae_dssm":
 		run = VAE_DSSM(hidden_dim, latent_dim, nb_words)	
 	elif model == "vae_bpe":
 		#TODO Frozen or Trainable embedding option
-		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, embedding_layer)
+		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix)
 		run.initModel(sp, bpe_dict)
 
 
@@ -159,72 +158,72 @@ if __name__ == '__main__':
 
 
 	elif model == "vae":
-		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 	elif model == "kate":
-		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 	elif model == "kate2":
-		run = VAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
+		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
 	
 
 
 
 
 	elif model == "vdsh":
-		run = VDSH(nb_words, max_len, [embedding_layer, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
+		run = VDSH(nb_words, max_len, [embedding_matrix, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "vdsh_kate":
-		run = VDSH(nb_words, max_len, [embedding_layer, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
+		run = VDSH(nb_words, max_len, [embedding_matrix, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
 		
 	elif model == "seqvae":
-		run = SeqVAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer, word_dropout_prob=0.5, kl_weight=0.0001)
+		run = SeqVAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, word_dropout_prob=1, kl_weight=1)
 
 
 
 
 	elif model == "vae_lstm":
-		run = VAE_LSTM(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer)
+		run = VAE_LSTM(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer)
 	elif model == "kate_lstm":
-		run = VAE_LSTM(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], optimizer=optimizer)
+		run = VAE_LSTM(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer)
 
 
 
 	elif model == "kate2_bpe":
-		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp")
+		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict, bpe.index2word)
 	elif model == "kate2_bpeg":
-		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		run.encoder._make_predict_function()
 		graph = tf.get_default_graph()
 	elif model == "kate2_bpe_adam":
-		run = KATE3D(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
+		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 
 	elif model == "aae":
-		run = AAE(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp")
+		run = AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp")
 		run.initModel(sp, bpe_dict)
 
 	elif model == "kate1_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd2":
-		run = VarAutoEncoderQD2(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD2(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qd3_dssm":
-		run = VarAutoEncoderQD3(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
+		run = VarAutoEncoderQD3(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdc":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
 		run.initModel(sp, bpe_dict)
 	elif model == "kate2_qdm":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
 		run.initModel(sp, bpe_dict)
 	elif model in ["kate2_qdg1", "kate2_qdg2"]:
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_layer, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
+		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
 		run.initModel(sp, bpe_dict)
 		if model == "kate2_qdg2":
 			run.discriminator.trainable = False
@@ -235,7 +234,7 @@ if __name__ == '__main__':
 	run.encoder._make_predict_function()
 	graph = tf.get_default_graph()
 
-	model_name = "%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s_%s_%s" % (model, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name, train_data, date_time)
+	model_name = "%s_%s_%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s" % (model, train_data, date_time, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name)
 
 	
 
@@ -278,7 +277,7 @@ if __name__ == '__main__':
 	# test_set = [[q_july, d_july, qrel_july, df_july, "JulyFlower"]]
 
 	if model in ["vae", "kate", "kate2"]:
-		reader = get_reader(train_data, batch_size, path)
+		reader = get_reader(train_data, path, batch_size=batch_size)
 		idx = int(len(reader) - ( len(reader) % batch_size))
 
 		batches = int(idx / (batch_size * 1.0))
@@ -295,10 +294,11 @@ if __name__ == '__main__':
 		print("Train %d : Val %d" % (len(x_train), len(x_val)))
 
 	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
-
 		train_data_dir = '%sdata/train_data/%s.npy' % (path,train_data)
+
 		if os.path.exists(train_data_dir):
 			x_train = np.load(train_data_dir)
+			x_train = x_train[:100]
 		else:
 			reader = get_reader(train_data, path)
 			x_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
@@ -307,9 +307,30 @@ if __name__ == '__main__':
 		if model in ["seqvae", "seqvae2"]:
 			x_train = [x_train, x_train]
 
-	elif "vdsh" in model or "dssm" in model:
+	elif model in ["bilstm", "dssm", "dssm2", "dssm_lstm"]:
+		
+		if os.path.exists(train_data_dir):
+			q_train = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
+			d_train = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
+			q_train = q_train[:100]
+			d_train = d_train[:100]
 
-		reader = get_reader(train_data, batch_size, path)
+		else:
+			reader = get_reader(train_data, path)
+			q_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
+			d_train = parse_texts_bpe(reader.d.tolist(), sp, bpe_dict, max_len, enablePadding=True)
+		
+		if "bilstm" in model:
+			y_train = np.concatenate([np.ones(len(q_train)), np.zeros(len(q_train))])
+
+		else:
+			y_train = np.zeros((len(q_train), 2))
+			y_train[:, 0] = 1
+
+
+	elif "vdsh" in model :
+
+		reader = get_reader(train_data, path)
 		idx = int(len(reader) - ( len(reader) % batch_size))
 		batches = int(idx / (batch_size * 1.0))
 		val_idx = int(0.1 * batches) * batch_size
@@ -328,31 +349,22 @@ if __name__ == '__main__':
 		shuffle(idx_val)
 
 
-		if "dssm" in model:
+		
 
-			x_train = [q_train, d_train, d_train[idx_train]]
-			y_train = np.zeros((len(q_train), 2))
-			y_train[:, 0] = 1
+		q_train = np.concatenate([q_train, q_train])
+		d_train = np.concatenate([d_train, d_train[idx_train]])
 
-			x_val = [q_val, d_val, d_val[idx_val]]
-			y_val = np.zeros((len(q_val), 2))
-			y_val[:, 0] = 1
-		else:
+		idx = np.arange(len(q_val))
+		shuffle(idx)
 
-			q_train = np.concatenate([q_train, q_train])
-			d_train = np.concatenate([d_train, d_train[idx_train]])
+		q_val = np.concatenate([q_val, q_val])
+		d_val = np.concatenate([d_val, d_val[idx_val]])
 
-			idx = np.arange(len(q_val))
-			shuffle(idx)
+		x_train = [q_train, d_train]
+		y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
 
-			q_val = np.concatenate([q_val, q_val])
-			d_val = np.concatenate([d_val, d_val[idx_val]])
-
-			x_train = [q_train, d_train]
-			y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
-
-			x_val = [q_val, d_val]
-			y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
+		x_val = [q_val, d_val]
+		y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
 
 		# print("Train %d : Val %d" % (len(x_train), len(x_val)))
 
@@ -361,7 +373,7 @@ if __name__ == '__main__':
 	cosine = CosineSim(latent_dim)
 
 
-	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2", "dssm", "dssm2", "dssm_lstm"]:
+	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2"]:
 		try:
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
@@ -371,7 +383,7 @@ if __name__ == '__main__':
 						        validation_data=(x_val, y_val),
 						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
 						                    # TQDMCallback(),
-						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+						                    # EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
 						                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
 						                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
 						                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
@@ -381,27 +393,62 @@ if __name__ == '__main__':
 		except Exception as e:
 				print(e)
 				pass
+	elif model in ["dssm", "dssm2", "dssm_lstm", "bilstm"]:
 
-	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
-		try:
+		best_auc_score = 0
+		for epoch in range(epochs):
+
+			idx = np.arange(len(q_train))
+			shuffle(idx)
+
+			if "bilstm" in model:
+				x_train = [np.concatenate([q_train, q_train]), np.concatenate([d_train, d_train[idx]])]
+			else:
+				x_train = [q_train, d_train, d_train[idx]]
+
+			t1 = time()
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
-						        epochs=epochs,
+						        epochs=1,
 						        verbose=0,
 						        batch_size=batch_size,
 						        validation_split=0.2,
-						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
-						                    # TQDMCallback(),
-						                    EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
-						                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-						                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-						                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
-						                    KL_Annealing(run)
-						                  ]
 						        )
-		except Exception as e:
-				print(e)
-				pass
+			t2 = time()
+			may_ndcg, june_ndcg, july_auc = evaluate(run, test_set)
+			print_output = '%s, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (run.name(), epoch, t2-t1 , may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], hist.history['val_loss'][-1])
+
+			print(print_output)
+			with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+				myfile.write(print_output)
+
+			if july_auc > best_auc_score:
+				best_auc_score = july_auc
+				run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
+				run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
+
+
+	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
+		# try:
+		hist = run.model.fit(x_train, y_train,
+					        shuffle=True,
+					        epochs=epochs,
+					        verbose=0,
+					        batch_size=batch_size,
+					        validation_split=0.2,
+					        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
+					                    # TQDMCallback(),
+					                    # EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
+					                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+					                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
+					                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
+					                    # KL_Annealing(run)
+					             
+					                  ]
+					        )
+		# except Exception as e:
+		# 		print(e)
+		# 		pass
 	else:
 
 		best_auc_score = 0
@@ -412,8 +459,8 @@ if __name__ == '__main__':
 
 	# 		Run models that cannot fit all training dataset into memory
 			# restart the reader thread
-			reader = get_reader(train_data, batch_size, path)
-			reader2 = get_reader(train_data, batch_size, path)
+			reader = get_reader(train_data, path, batch_size=batch_size)
+			reader2 = get_reader(train_data, path, batch_size=batch_size)
 
 			
 			for iteration in range(int(iterations / eval_every_step)):
@@ -435,7 +482,7 @@ if __name__ == '__main__':
 						t2 = time()
 						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
 
-					may_ndcg, june_ndcg, july_auc = evaluate(run, cosine, test_set)
+					may_ndcg, june_ndcg, july_auc = evaluate(run, test_set)
 
 					# generate output
 					# run.generate_output(q_july, d_july)

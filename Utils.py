@@ -90,11 +90,15 @@ def ranking_measure(qrel, pred):
 
     return ndcg_score, map_score
 
-def evaluate(run, cosine, test_set):
+def evaluate(run, test_set):
     may_ndcg, june_ndcg, july_auc = 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
-        pred = cosine.model.predict([run.encoder.predict(q), run.encoder.predict(d)])
+        q_ = run.encoder.predict(q)
+        d_ = run.encoder.predict(d)
+        cosine = CosineSim(q_.shape[-1])
+
+        pred = cosine.model.predict([q_, d_])
         
         if test_data in ["MayFlower", "JuneFlower"]:
             pred = convert_2_trec(df.q.tolist(), df.d.tolist(), pred, False)
@@ -117,14 +121,19 @@ def evaluate(run, cosine, test_set):
 def get_reader(train_data, path, iterator=False, batch_size=256):
     train_data_dir = '%sdata/train_data/%s' % (path,train_data)
     if train_data in ["30M_EN_pos_qd_log", "30M_QD.txt", "30M_QD_lower2.txt"]:
-        # reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
-        reader = pd.read_csv(train_data_dir, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
+        if iterator:
+            reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
+        else:
+            reader = pd.read_csv(train_data_dir, usecols=[0,1,2], names=["label","q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "1M_EN_QQ_log":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0,1], names=["q", "d"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "100M_query":
         reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, usecols=[0], names=["q"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "QueryLog":
-        reader = pd.read_csv(train_data_dir, names=["q"], sep="\t", header=None, error_bad_lines=False)
+        if iterator:
+            reader = pd.read_csv(train_data_dir, chunksize=batch_size, iterator=True, names=["q"], sep="\t", header=None, error_bad_lines=False)
+        else:
+            reader = pd.read_csv(train_data_dir, names=["q"], sep="\t", header=None, error_bad_lines=False)
         # reader = pd.read_csv(train_data_dir, nrows=1000, names=["q"], sep="\t", header=None, error_bad_lines=False)
     elif train_data == "QueryQueryLog":
         reader = pd.read_csv(train_data_dir, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
