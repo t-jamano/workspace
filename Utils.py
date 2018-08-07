@@ -27,7 +27,10 @@ from nltk.translate.bleu_score import sentence_bleu
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
 from keras.models import model_from_json
+from keras.models import Model
+from keras.layers import Input, merge
 from keras.callbacks import Callback
+from scipy import stats
 import sys, re, os, os.path
 import argparse
 from time import time
@@ -37,6 +40,14 @@ from time import time
 # Pandas scripts
 # df[~df.isnull().any(axis=1)] -> remove null rows
 # df[(df.market.str.contains("en-")) & (df.label == 1)] -> where AND
+
+class CosineSim():
+    def __init__(self, feature_num):
+        q_input = Input(shape=(feature_num,))
+        d_input = Input(shape=(feature_num,))
+
+        pred = merge([q_input, d_input], mode="cos")
+        self.model = Model([q_input, d_input], pred)
 
 
 def load_keras_model():
@@ -91,14 +102,14 @@ def ranking_measure(qrel, pred):
     return ndcg_score, map_score
 
 def evaluate(run, test_set):
-    may_ndcg, june_ndcg, july_auc = 0, 0, 0
+    may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
-        q_ = run.encoder.predict(q)
-        d_ = run.encoder.predict(d)
+        q_ = run.predict(q)
+        d_ = run.predict(d)
         cosine = CosineSim(q_.shape[-1])
 
-        pred = cosine.model.predict([q_, d_])
+        pred = cosine.model.predict([q_, d_]).flatten()
         
         if test_data in ["MayFlower", "JuneFlower"]:
             pred = convert_2_trec(df.q.tolist(), df.d.tolist(), pred, False)
@@ -109,13 +120,16 @@ def evaluate(run, test_set):
             elif test_data == "JuneFlower":
                 june_ndcg = ndcg_score
 
-        elif test_data in ["JulyFlower"]:
-            july_auc = auc(qrel, pred.flatten())
+        elif test_data == "JulyFlower":
+            july_auc = auc(qrel, pred)
+        elif test_data ==  "para":
+            para_auc = auc(qrel, pred)
+        elif test_data == "quora":
+            quora_auc = auc(qrel, pred)
+        elif test_data in ["sts"]:
+            sts_pcc = scipy.stats.pearsonr(pred, qrel)[0]
 
-
-            
-
-    return may_ndcg, june_ndcg, july_auc
+    return may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc
 
 
 def get_reader(train_data, path, iterator=False, batch_size=256):
@@ -140,7 +154,11 @@ def get_reader(train_data, path, iterator=False, batch_size=256):
         # reader = pd.read_csv(train_data_dir, nrows=5000, names=["q", "d", "label"], sep="\t", header=None, error_bad_lines=False)
     return reader
 
-
+def toBOW(x, nb_words):
+    x_ = np.zeros((len(x), nb_words))
+    for idx, i in enumerate(x):
+        x_[idx][i] = 1
+    return x_
 
 def sent_generator(reader, tokeniser, batch_size, max_len, feature_num):
     for df in reader:
@@ -199,6 +217,28 @@ def get_test_data(filename, path):
         df = df.dropna()
         qrel = df.label.values
 
+    elif filename == "sts":
+
+        file_dir = '%sdata/train_data/sts-b/test.tsv' % (path)
+        df = pd.read_csv(file_dir, sep="\t",encoding='utf-8',quoting=3,  header=None, error_bad_lines=False, usecols=[5,6,4], names=["label","q","d"])
+        df = df.dropna()
+        qrel = df.label.values
+
+    elif filename == "quora":
+        file_dir = "%sdata/train_data/quora/dev.tsv" % path
+        df = pd.read_csv(file_dir, sep="\t",encoding='utf-8',quoting=3,  header=None, error_bad_lines=False, usecols=[3,4,5], names=["q","d","label"])
+        df = df.dropna()
+        qrel = df.label.values
+
+    elif filename == "para":
+        file_dir = "%sdata/train_data/para/ParaphraseIdeal.txt" % path
+        df = pd.read_csv(file_dir, sep="\t",encoding='utf-8',quoting=3,  header=None, error_bad_lines=False, usecols=[0,1,2], names=["q","d","label"])
+        df = df.dropna()
+        qrel = df.label.values
+
+    df.q = df.q.astype(str).str.lower()
+    df.d = df.d.astype(str).str.lower()
+
     return df, qrel
 
 def parse_texts(texts, tokeniser, max_len):   
@@ -233,6 +273,12 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding=
     
     return np.array(x) if not enablePadding else pad_sequences(x, maxlen=max_len, padding=padding)
 
+
+def kl_anneal_function(anneal_function, step, k, x0):
+    if anneal_function == 'logistic':
+        return float(1/(1+np.exp(-k*(step-x0))))
+    elif anneal_function == 'linear':
+        return min(1, step/x0/2)
 
 def to_2D_one_hot(x, nb_words):
 
@@ -325,6 +371,22 @@ def ttest(res1, res2, metric="ndcg"):
 #                 tokens = text_to_word_sequence(i)
                 
 #             [model[] for i in texts]
+
+
+def write_to_files(run, print_output, file_output, path, model_name, july_auc, best_auc_score, model):
+    print(print_output)
+    with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+        myfile.write(file_output)
+
+    if july_auc > best_auc_score:
+        best_auc_score = july_auc
+
+        if model not in ["s2s_aae", "s2s_wae", "aae", "wae"]:
+
+            run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
+            run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
+
+    return best_auc_score
 
 
 class CustomModelCheckpoint(Callback):
@@ -428,11 +490,10 @@ class CustomModelCheckpoint(Callback):
 
 class EvaluationCheckpoint(Callback):
     
-    def __init__(self, run, cosine, test_set, model_name, path, graph):
+    def __init__(self, run, test_set, model_name, path, graph):
         super(EvaluationCheckpoint, self).__init__()
         
         self.run = run
-        self.cosine = cosine
         self.test_set = test_set
         self.model_name = model_name
         self.path = path
@@ -451,7 +512,7 @@ class EvaluationCheckpoint(Callback):
             loss = logs.get("loss")
             val_loss = logs.get("val_loss")
 
-            may_ndcg, june_ndcg, july_auc = evaluate(self.run, self.cosine, self.test_set)
+            may_ndcg, june_ndcg, july_auc = evaluate(self.run, self.test_set)
             print_output = '%s, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (self.run.name(), epoch, time() - self.epoch_time_start, may_ndcg, june_ndcg, july_auc, loss, val_loss)
 
             print(print_output)

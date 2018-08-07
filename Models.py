@@ -8,7 +8,7 @@ K.set_session(session)
 
 from Utils import *
 from random import shuffle
-from keras.layers import Bidirectional, Dense, Embedding, GRU, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
+from keras.layers import Bidirectional, Dense, Merge, Embedding, BatchNormalization, GRU, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
 from keras.layers.advanced_activations import ELU
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam, SGD, RMSprop, Adadelta
@@ -18,15 +18,16 @@ from keras.models import Model, load_model, Sequential
 from keras.engine import Layer
 from keras.layers.convolutional import Convolution1D
 from keras.layers.merge import concatenate, dot
+from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.callbacks import LambdaCallback
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
 # from keras_adversarial.legacy import l1l2
-# from keras_adversarial import AdversarialModel, fix_names, n_choice
-# from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling
-from keras.layers import LeakyReLU, Activation
+from keras_adversarial import AdversarialModel, fix_names
+from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling, AdversarialOptimizerAlternating
+from keras.layers import LeakyReLU, Activation, Concatenate, Dot, Add, Subtract, Multiply
 from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
@@ -38,6 +39,7 @@ from gensim.models import KeyedVectors
 import sentencepiece as spm
 from copy import copy
 from nltk.translate.bleu_score import sentence_bleu
+import random
 
 def zero_loss(y_true, y_pred):
     return K.zeros_like(y_pred)
@@ -184,987 +186,16 @@ class Dense_tied(Dense):
             output += self.bias
         return self.activation(output)
 
-class AAE(object):
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model'):
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
 
-        self.nb_words = nb_words
-        self.max_len = max_len
-        self.emb = emb
 
-        self.decoder = self.create_decoder()
-        self.encoder = self.create_encoder()
-        autoencoder = Model(self.encoder.inputs, self.decoder(self.encoder(self.encoder.inputs)))
-        discriminator = self.create_discriminator()
 
-        x = self.encoder.inputs[0]
-        z = self.encoder(x)
-        xpred = self.decoder(z)
-        zreal = normal_latent_sampling((self.dim[1],))(x)
-        yreal = discriminator(zreal)
-        yfake = discriminator(z)
-        aae = Model(x, fix_names([xpred, yfake, yreal], ["xpred", "yfake", "yreal"]))
-        
-        generative_params = self.decoder.trainable_weights + self.encoder.trainable_weights
-        
-        self.model = AdversarialModel(base_model=aae,
-                                 player_params=[generative_params, discriminator.trainable_weights],
-                                 player_names=["decoder", "discriminator"])
-        self.model.adversarial_compile(adversarial_optimizer=AdversarialOptimizerSimultaneous(),
-                                  player_optimizers=[Adam(1e-4, decay=1e-4), Adam(1e-3, decay=1e-4)],
-                                  loss={"yfake": "binary_crossentropy", "yreal": "binary_crossentropy",
-                                    "xpred": "mean_squared_error"},
-                              player_compile_kwargs=[{"loss_weights": {"yfake": 1e-2, "yreal": 1e-2, "xpred": 1}}] * 2)
-
-    def create_discriminator(self):
-
-        z = Input((self.dim[1],))
-        h = z
-        h = Dense(self.dim[0], name="discriminator_h1")(h)
-        h = LeakyReLU(0.2)(h)
-        h = Dense(self.dim[1], name="discriminator_h2")(h)
-        h = LeakyReLU(0.2)(h)
-        y = Dense(1, name="discriminator_y", activation="sigmoid")(h)
-        return Model(z, y)
-    
-    def create_decoder(self):
-        
-        z = Input(shape=(self.dim[1],))
-
-        act = 'tanh'
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        decoder_mean = Dense(self.nb_words, activation='softmax')
-
-        h_decoded = decoder_h(z)
-        h_decoded = RepeatVector(self.max_len)(h_decoded)
-        h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
-        x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
-
-
-        return Model(z, x_decoded_mean, name="decoder")
-    
-    def create_encoder(self):
-        
-        act = 'tanh'
-        x = Input(shape=(self.max_len,))
-        embed_layer = self.emb
-        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-        h1 = embed_layer(x)
-        h1 = bilstm(h1)
-        h1 = hidden_layer1(h1)
-
-        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-
-        if self.comp_topk != None:
-            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
-
-        z = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
-        
-        return Model(x, z, name="encoder")
-
-
-
-    def vae_loss(self, x, x_decoded_mean):
-        # xent_loss =  self.max_len * K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
-
-        return xent_loss + kl_loss
-
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-                
-                x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                x_one_hot = to_categorical(x, self.nb_words)
-                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                valid = np.ones(batch_size)
-                fake = np.zeros(batch_size)
-                yield x, [x_one_hot, valid, fake, x_one_hot, fake, valid]
-
-
-class VarAutoEncoderQD3(object):
-    """VarAutoEncoder for topic modeling.
-
-        Parameters
-        ----------
-        dim : dimensionality of encoding space.
-
-        nb_epoch :
-
-        """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5, optimizer=Adadelta(lr=2.), num_negatives=1):
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
-
-        self.nb_words = nb_words
-        self.max_len = max_len
-        self.enableCross = enableCross
-        self.enableMemory = enableMemory
-        self.enableGAN = enableGAN
-        self.alpha = alpha
-        self.num_negatives = num_negatives
-
-
-        
-
-
-        act = 'tanh'
-        
-        q_input_layer = Input(shape=(self.max_len,))
-        d_input_layer = Input(shape=(self.max_len,))
-        n_d_input_layer = [Input(shape =(self.max_len,)) for j in range(self.num_negatives)]
-
-        
-        embed_layer = emb
-        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-
-        cos_embed_layer = emb
-        cos_bilstm = Bidirectional(LSTM(self.dim[0]))
-        cos_hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-
-        q = embed_layer(q_input_layer)
-        q = bilstm(q)
-        q = hidden_layer1(q)
-        
-        d = embed_layer(d_input_layer)
-        d = bilstm(d)
-        d = hidden_layer1(d)
-
-        cos_q = cos_embed_layer(q_input_layer)
-        cos_q = cos_bilstm(cos_q)
-        cos_q = cos_hidden_layer1(cos_q)
-
-        query_sem = cos_hidden_layer1(cos_bilstm(cos_embed_layer(q_input_layer)))
-        pos_doc_sem = cos_hidden_layer1(cos_bilstm(cos_embed_layer(d_input_layer)))
-        neg_doc_sems = [cos_hidden_layer1(cos_bilstm(cos_embed_layer(neg_doc))) for neg_doc in n_d_input_layer]
-
-
-        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
-        R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
-
-        concat_Rs = concatenate([R_Q_D_p] + R_Q_D_ns)
-        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
-
-        weight = np.array([1]).reshape(1, 1, 1)
-        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
-        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
-
-        prob = Activation("softmax")(with_gamma) # See equation (5).
-
-
-
-
-        self.hidden_q = q
-        self.hidden_d = d
-        
-        dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
-        dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
-
-        cos_dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
-        cos_dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
-
-        self.q_mean = dense_mean(q)
-        self.q_log_var = dense_var(q)
-        self.d_mean = dense_mean(d)
-        self.d_log_var = dense_var(d)
-
-        # cosine part 
-        # self.cos_q_mean = cos_dense_mean(cos_q)
-        # self.cos_q_log_var = cos_dense_var(cos_q)
-        # self.cos_d_mean = cos_dense_mean(cos_d)
-        # self.cos_d_log_var = cos_dense_var(cos_d)
-
-        # add private
-        # self.q_mean = merge([self.q_mean, self.cos_q_mean], mode="sum")
-        # self.q_log_var = merge([self.q_log_var, self.cos_q_log_var], mode="sum")
-
-        # self.d_mean = merge([self.d_mean, self.cos_d_mean], mode="sum")
-        # self.d_log_var = merge([self.d_log_var, self.cos_d_log_var], mode="sum")
-
-        if self.comp_topk != None:
-            kc_layer = KCompetitive(self.comp_topk, self.ctype)
-            self.q_mean = kc_layer(self.q_mean)
-            self.d_mean = kc_layer(self.d_mean)
-
-            # kc_layer = KCompetitive(self.comp_topk, self.ctype)
-            # self.cos_q_mean = kc_layer(self.cos_q_mean)
-            # self.cos_d_mean = kc_layer(self.cos_d_mean)
-
-        # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
-        encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
-
-
-        # cos_encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_q_mean, self.cos_q_log_var])
-        # cos_encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.cos_d_mean, self.cos_d_log_var])
-        # add private
-
-        # encoded_q = merge([encoded_q, cos_encoded_q], mode="sum")
-        # encoded_d = merge([encoded_d, cos_encoded_d], mode="sum")
-
-
-
-        # we instantiate these layers separately so as to reuse them later
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
-        decoder_mean = Dense(self.nb_words, activation='softmax')
-        
-        decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
-
-        self.hidden_decoded_q = decoder_h(encoded_q)
-        self.hidden_decoded_d = decoder_h(encoded_d)
-
-
-        q_decoded = decoder_h(encoded_q)
-        q_decoded = RepeatVector(self.max_len)(q_decoded)
-        q_decoded = decoder_bilstm(q_decoded)
-        
-        d_decoded = decoder_h(encoded_d)
-        d_decoded = RepeatVector(self.max_len)(d_decoded)
-        d_decoded = decoder_bilstm(d_decoded)
-
-        
-        
-        q_decoded_mean = TimeDistributed(decoder_mean, name='recon_q')(q_decoded)
-        d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
-
-
-
-        self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, prob], inputs=[q_input_layer, d_input_layer] + n_d_input_layer)
-
-
-        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
-
-
-        self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'categorical_crossentropy'], loss_weights=[1,1, self.alpha])
-
-            # self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
-
-        
-
-    def vae_loss_q(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
-        return xent_loss + kl_loss
-    
-    def vae_loss_d(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
-        return xent_loss + kl_loss
-
-    def vae_loss_cross(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        return xent_loss
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    # def batch_generator(self, reader, train_data, batch_size):
-    #     while True:
-    #         for df in reader:
-
-    #             q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-    #             d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                
-    #             q_one_hot = to_categorical(q, self.nb_words)
-    #             q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                
-    #             d_one_hot = to_categorical(d, self.nb_words)
-    #             d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-
-    #             if self.enableCross:
-    #                 yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
-    #             elif self.enableMemory or self.enableGAN:
-    #                 one = np.ones(batch_size)
-    #                 yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
-    #             else:
-    #                 yield [q,d], [q_one_hot, d_one_hot, df.label.values]
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-
-                q_one_hot = to_categorical(q, self.nb_words)
-                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                
-                d_one_hot = to_categorical(d, self.nb_words)
-                d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-
-                # negative sampling from positive pool
-                neg = [[] for j in range(self.num_negatives)]
-                for i in range(batch_size):
-                    possibilities = list(range(batch_size))
-                    possibilities.remove(i)
-                    negatives = np.random.choice(possibilities, self.num_negatives, replace = False)
-                    for j in range(self.num_negatives):
-                        negative = negatives[j]
-                        neg[j].append(d[negative].tolist())
-                
-                y = np.zeros((batch_size, self.num_negatives + 1))
-                y[:, 0] = 1
-                
-                for j in range(self.num_negatives):
-                    neg[j] = np.array(neg[j])
-                
-                yield [q, d] + [neg[j] for j in range(self.num_negatives)], [q_one_hot, d_one_hot, y]
-                
-# BPE version
-class VarAutoEncoderQD2(object):
-    """VarAutoEncoder for topic modeling.
-
-        Parameters
-        ----------
-        dim : dimensionality of encoding space.
-
-        nb_epoch :
-
-        """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5, optimizer=Adadelta(lr=2.)):
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
-
-        self.nb_words = nb_words
-        self.max_len = max_len
-        self.enableCross = enableCross
-        self.enableMemory = enableMemory
-        self.enableGAN = enableGAN
-        self.alpha = alpha
-
-        act = 'tanh'
-        
-        q_input_layer = Input(shape=(self.max_len,))
-        d_input_layer = Input(shape=(self.max_len,))
-
-        
-        embed_layer = emb
-        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-
-        d_bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-        d_hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-
-        q = embed_layer(q_input_layer)
-        q = bilstm(q)
-        q = hidden_layer1(q)
-        
-        d = embed_layer(d_input_layer)
-        d = d_bilstm(d)
-        d = d_hidden_layer1(d)
-
-        self.hidden_q = q
-        self.hidden_d = d
-        
-        dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
-        dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
-
-        self.q_mean = dense_mean(q)
-        self.q_log_var = dense_var(q)
-        
-        self.d_mean = dense_mean(d)
-        self.d_log_var = dense_var(d)
-
-        if self.comp_topk != None:
-            kc_layer = KCompetitive(self.comp_topk, self.ctype)
-            self.q_mean = kc_layer(self.q_mean)
-            self.d_mean = kc_layer(self.d_mean)
-
-        # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
-        encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
-        
-        # old
-        # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
-        # 
-        # cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
-        cos_qd = merge([self.q_mean, self.d_mean], mode="mul",)
-        cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
-
-
-
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        decoder_mean = Dense(self.nb_words, activation='softmax')
-        decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
-
-        d_decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        d_decoder_mean = Dense(self.nb_words, activation='softmax')
-        d_decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
-
-        self.hidden_decoded_q = decoder_h(encoded_q)
-        self.hidden_decoded_d = d_decoder_h(encoded_d)
-
-
-        q_decoded = decoder_h(encoded_q)
-        q_decoded = RepeatVector(self.max_len)(q_decoded)
-        q_decoded = decoder_bilstm(q_decoded)
-        
-        d_decoded = d_decoder_h(encoded_d)
-        d_decoded = RepeatVector(self.max_len)(d_decoded)
-        d_decoded = d_decoder_bilstm(d_decoded)
-
-        
-        
-        q_decoded_mean = TimeDistributed(decoder_mean, name='recon_q')(q_decoded)
-        d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
-
-
-        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos", name="cos_q"))
-        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
-
-
-        if self.enableCross:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableMemory:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_m_q, cos_m_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableGAN:
-            self.discriminator = self.build_discriminator()
-            validity_q = self.discriminator(encoded_q)
-            validity_d = self.discriminator(encoded_d)
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, validity_q, validity_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-    
-        else:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
-
-
-        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
-
-
-
-
-
-
-        # optimizer = Adam()
-        
-
-        if self.enableCross:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'])
-        
-        elif self.enableMemory:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-        
-        elif self.enableGAN:
-            # , loss_weights=[0.999, 0.999, 0.001, 0.001, 0.999]
-            self.discriminator.compile(loss='binary_crossentropy',optimizer=optimizer,metrics=['accuracy'])
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-
-        else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'])
-
-        
-
-    def vae_loss_q(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
-        return xent_loss + kl_loss
-    
-    def vae_loss_d(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
-        return xent_loss + kl_loss
-
-    def vae_loss_cross(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        return xent_loss
-
-    def build_discriminator(self):
-
-        dis = Sequential()
-
-        dis.add(Dense(self.dim[0], input_dim=self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(1, activation="sigmoid"))
-
-        encoded_repr = Input(shape=(self.dim[1], ))
-        validity = dis(encoded_repr)
-
-        return Model(encoded_repr, validity)
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                
-                q_one_hot = to_categorical(q, self.nb_words)
-                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                
-                d_one_hot = to_categorical(d, self.nb_words)
-                d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-
-                if self.enableCross:
-                    yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
-                elif self.enableMemory or self.enableGAN:
-                    one = np.ones(batch_size)
-                    yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
-                else:
-                    yield [q,d], [q_one_hot, d_one_hot, df.label.values]
-
-    def batch_GAN_generator(self, reader, train_data, batch_size, graph):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-
-                with graph.as_default():
-                    # shuffle(x)
-                    q_fake = self.encoder.predict(q)
-                    # q_fake = np.random.normal(size=(batch_size, self.dim[1]))
-                    q_real = np.random.normal(size=(batch_size, self.dim[1]))
-                    d_fake = self.encoder.predict(d)
-                    # d_fake = np.random.normal(size=(batch_size, self.dim[1]))
-                    d_real = np.random.normal(size=(batch_size, self.dim[1]))
-                    
-                    ones = np.ones(batch_size)
-                    zeros = np.zeros(batch_size)
-
-
-                    x_ = np.concatenate([q_real, q_fake, d_real, d_fake])
-                    y_ = np.concatenate([ones, zeros, ones, zeros])
-
-                    idx = np.random.randint(batch_size * 4, size=batch_size * 4)
-
-                yield x_[idx], y_[idx]
-
-
-
-# BPE version
-class VarAutoEncoderQD(object):
-    """VarAutoEncoder for topic modeling.
-
-        Parameters
-        ----------
-        dim : dimensionality of encoding space.
-
-        nb_epoch :
-
-        """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', enableCross=False, enableMemory=False, enableGAN=False, alpha=0.5, optimizer=Adadelta(lr=2.)):
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
-
-        self.nb_words = nb_words
-        self.max_len = max_len
-        self.enableCross = enableCross
-        self.enableMemory = enableMemory
-        self.enableGAN = enableGAN
-        self.alpha = alpha
-
-        self.kl_weight = 0.0
-        self.pred_weight = 0.0
-
-        act = 'tanh'
-        
-        q_input_layer = Input(shape=(self.max_len,))
-        d_input_layer = Input(shape=(self.max_len,))
-
-        
-        embed_layer = emb
-        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
-
-
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-
-        q = embed_layer(q_input_layer)
-        q = bilstm(q)
-        q = hidden_layer1(q)
-        
-        d = embed_layer(d_input_layer)
-        d = bilstm(d)
-        d = hidden_layer1(d)
-
-        self.hidden_q = q
-        self.hidden_d = d
-        
-        dense_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')
-        dense_var = Dense(self.dim[1], kernel_initializer='glorot_normal')
-
-        self.q_mean = dense_mean(q)
-        self.q_log_var = dense_var(q)
-        
-        self.d_mean = dense_mean(d)
-        self.d_log_var = dense_var(d)
-
-        if self.comp_topk != None:
-            kc_layer = KCompetitive(self.comp_topk, self.ctype)
-            self.q_mean = kc_layer(self.q_mean)
-            self.d_mean = kc_layer(self.d_mean)
-
-        # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([self.q_mean, self.q_log_var])
-        encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([self.d_mean, self.d_log_var])
-        
-        # old
-        # cos_qd = Flatten(name="cos_qd")(merge([encoded_q, encoded_d], mode="cos",))
-        # 
-        cos_qd = Flatten()(merge([self.q_mean, self.d_mean], mode="cos",))
-        cos_qd = Dense(1, activation="sigmoid", name="cos_qd")(cos_qd)
-
-
-
-        # we instantiate these layers separately so as to reuse them later
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
-        decoder_mean = Dense(self.nb_words, activation='softmax')
-        
-        decoder_bilstm = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))
-
-        self.hidden_decoded_q = decoder_h(encoded_q)
-        self.hidden_decoded_d = decoder_h(encoded_d)
-
-
-        q_decoded = decoder_h(encoded_q)
-        q_decoded = RepeatVector(self.max_len)(q_decoded)
-        q_decoded = decoder_bilstm(q_decoded)
-        
-        d_decoded = decoder_h(encoded_d)
-        d_decoded = RepeatVector(self.max_len)(d_decoded)
-        d_decoded = decoder_bilstm(d_decoded)
-
-        
-        
-        q_decoded_mean = TimeDistributed(decoder_mean, name='recon_q')(q_decoded)
-        d_decoded_mean = TimeDistributed(decoder_mean, name='recon_d')(d_decoded)
-
-
-        cos_m_q = Flatten()(merge([self.hidden_q, self.hidden_decoded_q], mode="cos", name="cos_q"))
-        cos_m_d = Flatten()(merge([self.hidden_d, self.hidden_decoded_d], mode="cos", name="cos_d"))
-
-
-        if self.enableCross:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableMemory:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_m_q, cos_m_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-        
-        elif self.enableGAN:
-            self.discriminator = self.build_discriminator()
-            validity_q = self.discriminator(encoded_q)
-            validity_d = self.discriminator(encoded_d)
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, validity_q, validity_d, cos_qd], inputs=[q_input_layer, d_input_layer])
-    
-        else:
-            self.model = Model(outputs=[q_decoded_mean, d_decoded_mean, cos_qd], inputs=[q_input_layer, d_input_layer])
-
-
-        self.encoder = Model(outputs=self.q_mean, inputs=q_input_layer)
-
-
-        # optimizer = Adam()
-        # optimizer = Adadelta(lr=2.)
-        if self.enableCross:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, self.vae_loss_cross, self.vae_loss_cross, 'binary_crossentropy'], loss_weights=[1, 1, 1, 1, self.pred_weight])
-        
-        elif self.enableMemory:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-        
-        elif self.enableGAN:
-            # , loss_weights=[0.999, 0.999, 0.001, 0.001, 0.999]
-            self.discriminator.compile(loss='binary_crossentropy',optimizer=optimizer,metrics=['accuracy'])
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy', 'binary_crossentropy', 'binary_crossentropy'])
-
-        else:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[self.alpha, self.alpha, 1])
-
-            # self.model.compile(optimizer=optimizer, loss=[self.vae_loss_q, self.vae_loss_d, 'binary_crossentropy'], loss_weights=[1,1, self.pred_weight])
-
-        
-
-    def vae_loss_q(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.q_log_var - K.square(self.q_mean) - K.exp(self.q_log_var), axis=-1)
-        # return xent_loss + (self.kl_weight * kl_loss)
-        return xent_loss + kl_loss
-
-    def vae_loss_d(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.d_log_var - K.square(self.d_mean) - K.exp(self.d_log_var), axis=-1)
-        return xent_loss + kl_loss
-
-    def vae_loss_cross(self, x, x_decoded_mean):
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        return xent_loss
-
-    def build_discriminator(self):
-
-        dis = Sequential()
-
-        dis.add(Dense(self.dim[0], input_dim=self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(self.dim[1]))
-        dis.add(LeakyReLU(alpha=0.2))
-        dis.add(Dense(1, activation="sigmoid"))
-
-        encoded_repr = Input(shape=(self.dim[1], ))
-        validity = dis(encoded_repr)
-
-        return Model(encoded_repr, validity)
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                
-                q_one_hot = to_categorical(q, self.nb_words)
-                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                
-                d_one_hot = to_categorical(d, self.nb_words)
-                d_one_hot = d_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-
-                if self.enableCross:
-                    yield [q,d], [q_one_hot, d_one_hot, d_one_hot, q_one_hot, df.label.values]
-                elif self.enableMemory or self.enableGAN:
-                    one = np.ones(batch_size)
-                    yield [q,d], [q_one_hot, d_one_hot, one, one, df.label.values]
-                else:
-                    yield [q,d], [q_one_hot, d_one_hot, df.label.values]
-
-    def batch_GAN_generator(self, reader, train_data, batch_size, graph):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-
-                with graph.as_default():
-                    # shuffle(x)
-                    q_fake = self.encoder.predict(q)
-                    # q_fake = np.random.normal(size=(batch_size, self.dim[1]))
-                    q_real = np.random.normal(size=(batch_size, self.dim[1]))
-                    d_fake = self.encoder.predict(d)
-                    # d_fake = np.random.normal(size=(batch_size, self.dim[1]))
-                    d_real = np.random.normal(size=(batch_size, self.dim[1]))
-                    
-                    ones = np.ones(batch_size)
-                    zeros = np.zeros(batch_size)
-
-
-                    x_ = np.concatenate([q_real, q_fake, d_real, d_fake])
-                    y_ = np.concatenate([ones, zeros, ones, zeros])
-
-                    idx = np.random.randint(batch_size * 4, size=batch_size * 4)
-
-                yield x_[idx], y_[idx]
-
-# class VDSH(object):
+class VAE():
     
 
-#     def __init__(self, input_size, max_len, emb, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.)):
-#         self.input_size = input_size
-#         self.dim = dim
-#         self.emb = emb
-#         self.comp_topk = comp_topk
-#         self.ctype = ctype
-#         self.epsilon_std = epsilon_std
-#         self.max_len = max_len
-#         self.batch_size = batch_size
-#         self.nb_words = input_size
-#         self.optimizer = optimizer
-#         self.build()
-
-#     def build(self):
-#         act = 'tanh'
-#         input_layer_q = Input(shape=(self.max_len,))
-#         input_layer_d = Input(shape=(self.max_len,))
-
-#         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-#         hidden_layer1_cos = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-#         embed_q = GlobalMaxPooling1D()(self.emb[0](input_layer_q))
-#         embed_d = GlobalMaxPooling1D()(self.emb[0](input_layer_d))
-
-#         h1_q = hidden_layer1(embed_q)
-#         h1_d = hidden_layer1(embed_d)
-        
-        
-#         embed_q_cos = GlobalMaxPooling1D()(self.emb[1](input_layer_q))
-#         embed_d_cos = GlobalMaxPooling1D()(self.emb[1](input_layer_d))
-
-#         h1_q_cos = hidden_layer1_cos(embed_q_cos)
-#         h1_d_cos = hidden_layer1_cos(embed_d_cos)
-        
-# #       merge here
-#         h1_q = merge([h1_q, h1_q_cos], mode="mul")
-#         h1_d = merge([h1_d, h1_d_cos], mode="mul")
-
-
-#         z_mean_q = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_q)
-#         z_log_var_q = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_q)
-        
-#         z_mean_d = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_d)
-#         z_log_var_d = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1_d)
-
-#         if self.comp_topk != None:
-#             z_mean_k_q = KCompetitive(self.comp_topk, self.ctype)(z_mean_q)
-#             z_mean_k_d = KCompetitive(self.comp_topk, self.ctype)(z_mean_d)
-
-#             encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k_q, z_log_var_q])
-#             encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k_d, z_log_var_d])
-
-#         else:
-#             encoded_q = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_q, z_log_var_q])
-#             encoded_d = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_d, z_log_var_d])
-
-#         cos = Flatten()(merge([h1_q_cos, h1_d_cos], mode="cos"))
-        
-#         repeated_context = RepeatVector(self.max_len)
-#         decoder_h = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
-#         decoder_mean = TimeDistributed(Dense(self.nb_words, activation='tanh'))#softmax is applied in the seq2seqloss by tf
-       
-    
-#         h_decoded_q = decoder_h(repeated_context(encoded_q))
-#         x_decoded_mean_q = decoder_mean(h_decoded_q)
-        
-#         h_decoded_d = decoder_h(repeated_context(encoded_d))
-#         x_decoded_mean_d = decoder_mean(h_decoded_d)
-
-#         class CustomVariationalLayer(Layer):
-#             def __init__(self, max_len, batch_size, z_mean, z_log_var, **kwargs):
-#                 self.is_placeholder = True
-#                 super(CustomVariationalLayer, self).__init__(**kwargs)
-#                 self.target_weights = tf.constant(np.ones((batch_size, max_len)), tf.float32)
-#                 self.z_mean = z_mean
-#                 self.z_log_var = z_log_var
-                
-#             def vae_loss(self, x, x_decoded_mean):
-#                 labels = tf.cast(x, tf.int32)
-#                 xent_loss = K.sum(tf.contrib.seq2seq.sequence_loss(x_decoded_mean, labels, 
-#                                                              weights=self.target_weights,
-#                                                              average_across_timesteps=False,
-#                                                              average_across_batch=False), axis=-1)
-#                                                              #softmax_loss_function=softmax_loss_f), axis=-1)#, uncomment for sampled doftmax
-#                 kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
-#                 # kl_loss = 0
-#                 return K.mean(xent_loss + kl_loss)
-
-#             def call(self, inputs):
-#                 x = inputs[0]
-#                 x_decoded_mean = inputs[1]
-#                 loss = self.vae_loss(x, x_decoded_mean)
-#                 self.add_loss(loss, inputs=inputs)
-#                 # we don't use this output, but it has to have the correct shape:
-#                 return K.ones_like(x)
-        
-#         loss_layer_q = CustomVariationalLayer(self.max_len, self.batch_size, z_mean_q, z_log_var_q)([input_layer_q, x_decoded_mean_q])
-#         loss_layer_d = CustomVariationalLayer(self.max_len, self.batch_size, z_mean_d, z_log_var_d)([input_layer_d, x_decoded_mean_d])
-
-#         self.model = Model([input_layer_q, input_layer_d], [loss_layer_q, loss_layer_d, cos])
-#         self.model.compile(optimizer=self.optimizer, loss=[zero_loss, zero_loss, "binary_crossentropy"])
-
-#         # build a model to project inputs on the latent space
-#         self.encoder = Model(outputs=z_mean_q, inputs=input_layer_q)
-
-
-#     def sampling(self, args):
-#         z_mean, z_log_var = args
-#         epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-#                                   stddev=self.epsilon_std)
-
-#         return z_mean + K.exp(z_log_var / 2) * epsilon
-
-class VAE(object):
-    
-
-    def __init__(self, input_size, max_len, emb, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), enableKL=True):
+    def __init__(self, input_size, max_len, embedding_matrix, dim, batch_size, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, PoolMode="max"):
         self.input_size = input_size
         self.dim = dim
-        self.emb = emb
+        self.embedding_matrix = embedding_matrix
         self.comp_topk = comp_topk
         self.ctype = ctype
         self.epsilon_std = epsilon_std
@@ -1172,354 +203,65 @@ class VAE(object):
         self.batch_size = batch_size
         self.nb_words = input_size
         self.optimizer = optimizer
-        self.enableKL = enableKL
+        self.kl_weight = kl_weight
+        self.enableKL = True if kl_weight == 0 else False
+        self.PoolMode = PoolMode
         self.build()
 
     def build(self):
         act = 'tanh'
         input_layer = Input(shape=(self.max_len,))
-        emb_layer = self.emb
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        embed_x = GlobalMaxPooling1D()(self.emb(input_layer))
-        
-        h1 = hidden_layer1(embed_x)
-
-        z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-        z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-
-        if self.comp_topk != None:
-            z_mean_k = KCompetitive(self.comp_topk, self.ctype)(z_mean)
-            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean_k, z_log_var])
-        else:
-            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([z_mean, z_log_var])
+        emb_layer = Embedding(self.nb_words,
+                            self.embedding_matrix.shape[-1],
+                            weights=[self.embedding_matrix],
+                            input_length=self.max_len,
+                            trainable=True)
 
 
-        repeated_context = RepeatVector(self.max_len)
-        decoder_h = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
-        decoder_mean = TimeDistributed(Dense(self.nb_words, activation='tanh'))#softmax is applied in the seq2seqloss by tf
-        h_decoded = decoder_h(repeated_context(encoded))
-        x_decoded_mean = decoder_mean(h_decoded)
-
-        class CustomVariationalLayer(Layer):
-            def __init__(self, max_len, batch_size, enableKL, **kwargs):
-                self.is_placeholder = True
-                super(CustomVariationalLayer, self).__init__(**kwargs)
-                self.target_weights = tf.constant(np.ones((batch_size, max_len)), tf.float32)
-                self.enableKL = enableKL
-            def vae_loss(self, x, x_decoded_mean):
-                labels = tf.cast(x, tf.int32)
-                xent_loss = K.sum(tf.contrib.seq2seq.sequence_loss(x_decoded_mean, labels, 
-                                                             weights=self.target_weights,
-                                                             average_across_timesteps=False,
-                                                             average_across_batch=False), axis=-1)
-                                                             #softmax_loss_function=softmax_loss_f), axis=-1)#, uncomment for sampled doftmax
-                kl_loss = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1) if self.enableKL else 0
-                # kl_loss = 0
-                return K.mean(xent_loss + kl_loss)
-
-            def call(self, inputs):
-                x = inputs[0]
-                x_decoded_mean = inputs[1]
-                loss = self.vae_loss(x, x_decoded_mean)
-                self.add_loss(loss, inputs=inputs)
-                # we don't use this output, but it has to have the correct shape:
-                return K.ones_like(x)
-        
-        
-        
-        
-        
-        loss_layer = CustomVariationalLayer(self.max_len, self.batch_size, self.enableKL)([input_layer, x_decoded_mean])
-        self.model = Model(input_layer, [loss_layer])
-        # optimizer = Adadelta(lr=2.)
-        self.model.compile(optimizer=self.optimizer, loss=[zero_loss])
-
-        # build a model to project inputs on the latent space
-        self.encoder = Model(outputs=z_mean, inputs=input_layer)
-
-
-#     def fit(self, train_X, val_X, nb_epoch=50, batch_size=100):
-#         optimizer = Adadelta(lr=2.)
-#         self.vae.compile(optimizer=optimizer, loss=self.vae_loss)
-
-#         self.vae.fit(train_X[0], train_X[1],
-#                 shuffle=True,
-#                 epochs=nb_epoch,
-#                 batch_size=batch_size,
-#                 validation_data=(val_X[0], val_X[1]),
-#                 callbacks=[ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
-#                             EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
-#                             CustomModelCheckpoint(self.encoder, self.save_model, monitor='val_loss', save_best_only=True, mode='auto')
-#                         ]
-#                 )
-
-#         return self
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-
-# BPE version
-class KATE3D(object):
-    """VarAutoEncoder for topic modeling.
-
-        Parameters
-        ----------
-        dim : dimensionality of encoding space.
-
-        nb_epoch :
-
-        """
-    def __init__(self, nb_words, max_len, emb, dim, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', optimizer=Adadelta(lr=2.), enableGAN=False):
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
-
-        self.nb_words = nb_words
-        self.max_len = max_len
-        self.emb = emb
-        self.enableGAN = enableGAN
-
-        act = 'tanh'
-        input_layer = Input(shape=(self.max_len,))
-        self.embed_layer = emb
-        e_mask = Masking(mask_value=0)
-
-        # self.embed_layer.trainable = False
-        bilstm = Bidirectional(LSTM(self.dim[0], name='lstm_1'))
 
 
         hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
         
-        h1 = self.embed_layer(input_layer)
-        h1 = bilstm(e_mask(h1))
-        h1 = hidden_layer1(h1)
+        Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
+
+        h1 = Pooling(emb_layer(input_layer))
+        
+        # h1 = hidden_layer1(h1)
 
         self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
         self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
 
         if self.comp_topk != None:
             self.z_mean_k = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
-
-        # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean_k, self.z_log_var])
-
-        # we instantiate these layers separately so as to reuse them later
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        # decoder_mean = Dense_tied(self.nb_words, activation='softmax', tied_to=hidden_layer1)
-        decoder_mean = Dense(self.nb_words, activation='softmax')
-
-        h_decoded = decoder_h(encoded)
-        h_decoded = RepeatVector(self.max_len)(h_decoded)
-        h_decoded = Bidirectional(LSTM(self.dim[0], return_sequences=True, name='dec_lstm_1'))(h_decoded)
-        x_decoded_mean = TimeDistributed(decoder_mean, name='decoded_mean')(h_decoded)
-
-        if self.enableGAN:
-            self.discriminator = self.build_discriminator()
-            self.discriminator.compile(loss='binary_crossentropy',
-                optimizer=optimizer,
-                metrics=['accuracy'])
-
-            validity = self.discriminator(x_decoded_mean)
-
-        if self.enableGAN:
-            self.model = Model(outputs=[x_decoded_mean, validity], inputs=input_layer)
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean_k, self.z_log_var])
         else:
-            self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
-        # build a model to project inputs on the latent space
-        # self.encoder = Model(outputs=[self.z_mean, self.z_log_var, encoded], inputs=input_layer)
-        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
+            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
 
 
-
-        # build a digit generator that can sample from the learned distribution
-        # decoder_input = Input(shape=(self.dim[1],))
-        # _h_decoded = decoder_h(decoder_input)
-        # _x_decoded_mean = decoder_mean(_h_decoded)
-        # self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
-        if enableGAN:
-            self.model.compile(optimizer=optimizer, loss=[self.vae_loss, "binary_crossentropy"])
-        else:    
-            self.model.compile(optimizer=optimizer, loss=self.vae_loss)
-
-        
-           
-
-    def generate_output(self, x, y):
-
-        gen_x = np.argmax(self.model.predict(x), axis=-1)
-        gen_y = np.argmax(self.model.predict(y), axis=-1)
-
-        train = []
-        test = []
-        for i, j, k, l in zip(gen_x, gen_y, x, y):
-            gen_q = " ".join([self.index2word[t] for t in i])
-            gen_d = " ".join([self.index2word[t] for t in j])
-            real_q = " ".join([self.index2word[t] for t in k])
-            real_d = " ".join([self.index2word[t] for t in l])
-
-            train.append(sentence_bleu(real_q, gen_q))
-            test.append(sentence_bleu(real_d, gen_d))
-            # print("%s\t%s : %s\t%s\n" % (real_q, real_d, gen_q, gen_d))
-            # print("%s : %s\n" % (real_q, gen_q))
-            print(real_q)
-            print(gen_q)
-            print()
-        print(np.mean(train), np.mean(test))
-
-
-
-                
-                
-                
-    def build_discriminator(self):
-        # can be CNN proposed by Kim
-        act = 'tanh'
-        input_layer = Input(shape=(self.max_len, self.nb_words, ))
-        #fix
-        embed_layer = OnehotEmbedding(self.emb.get_weights()[0].shape[1])
-        bilstm = Bidirectional(LSTM(self.dim[0]))
-
-        hidden_layer1 = Dense(self.dim[1], kernel_initializer='glorot_normal', activation=act)
-        
-        h1 = embed_layer(input_layer)
-        h1 = bilstm(h1)
-        h1 = hidden_layer1(h1)
-
-        pred = Dense(1, activation="sigmoid")(h1)
-
-        model = Model(input_layer, pred)
-        embed_layer.set_weights(self.emb.get_weights())
-        return model
-
-
-    def vae_loss(self, x, x_decoded_mean):
-
-        x = K.flatten(x)
-        x_decoded_mean = K.flatten(x_decoded_mean)
-        xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-        # xent_loss = objectives.categorical_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
-
-        return xent_loss + kl_loss
-
-
-
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-    def initModel(self, sp, bpe_dict, index2word):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-        self.index2word = index2word
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-                
-                x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                x_one_hot = to_categorical(x, self.nb_words)
-                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                ones = np.ones(batch_size)
-
-                yield x, x_one_hot
-
-                # yield x, [x_one_hot, ones] if self.enableGAN else x, x_one_hot
-
-    def batch_GAN_generator(self, reader, train_data, batch_size, graph):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                q_one_hot = to_categorical(q, self.nb_words)
-                q_one_hot = q_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-
-                with graph.as_default():
-                    q_fake = self.model.predict(q)[0]
-                    q_real = q_one_hot
-                    
-                    ones = np.ones(batch_size)
-                    zeros = np.zeros(batch_size)
-
-                    x_ = np.concatenate([q_real, q_fake])
-                    y_ = np.concatenate([ones, zeros])
-
-                    idx = np.random.randint(batch_size * 2, size=batch_size * 2)
-
-                yield x_[idx], y_[idx]
-
-
-
-class KATE(object):
-
-
-    def __init__(self, input_size, dim, emb, comp_topk=None, ctype=None, epsilon_std=1.0, save_model='best_model', optimizer=Adadelta(lr=2.)):
-        self.input_size = input_size
-        self.dim = dim
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.save_model = save_model
-        self.emb = emb
-
-        self.nb_words = input_size
-
-        act = 'tanh'
-        input_layer = Input(shape=(self.input_size,))
-        embed_layer = OnehotEmbedding(emb.shape[1], d=1)
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-
-        h1 = embed_layer(input_layer)
-        h1 = hidden_layer1(h1)
-
-
-        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-
-        if self.comp_topk != None:
-            self.z_mean = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
-
-        # note that "output_shape" isn't necessary with the TensorFlow backend
-        encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
-
-        # we instantiate these layers separately so as to reuse them later
+        repeated_context = RepeatVector(self.max_len)
         decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        h_decoded = decoder_h(encoded)
-        decoder_mean = Dense(self.input_size, activation='sigmoid')
-        x_decoded_mean = decoder_mean(h_decoded)
 
-        self.model = Model(outputs=x_decoded_mean, inputs=input_layer)
-        # build a model to project inputs on the latent space
+        softmax_layer = Dense(self.nb_words, activation='softmax')
+        decoder_mean = TimeDistributed(softmax_layer, name="rec")
+        decoder_kl = TimeDistributed(softmax_layer, name="kl")
+
+        h_decoded = decoder_h(repeated_context(encoded))
+        x_decoded_mean = decoder_mean(h_decoded)
+        x_decoded_kl = decoder_kl(h_decoded)
+     
+        
+        
+        self.model = Model(input_layer, [x_decoded_mean, x_decoded_kl])
+        self.model.compile(optimizer=self.optimizer, loss=["sparse_categorical_crossentropy", self.kl_loss])
+
         self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
 
-        # build a digit generator that can sample from the learned distribution
-        decoder_input = Input(shape=(self.dim[1],))
-        _h_decoded = decoder_h(decoder_input)
-        _x_decoded_mean = decoder_mean(_h_decoded)
-        self.decoder = Model(outputs=_x_decoded_mean, inputs=decoder_input)
-        self.model.compile(optimizer=optimizer, loss=self.vae_loss)
-
-        embed_layer.set_weights([self.emb])
 
 
-
-    def vae_loss(self, x, x_decoded_mean):
-        xent_loss =  K.sum(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
-        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
-
-        return xent_loss + kl_loss
-
+    def name(self):
+        n = "vae_%s" % self.PoolMode if self.comp_topk == None else "kate_%s" % self.PoolMode
+        n =  n + "_kl" if self.enableKL else n
+        return n
     def sampling(self, args):
         z_mean, z_log_var = args
         epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
@@ -1527,20 +269,13 @@ class KATE(object):
 
         return z_mean + K.exp(z_log_var / 2) * epsilon
 
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
 
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-                
-
-                x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, enablePadding=False)
-                x_one_hot = to_2D_one_hot(x, self.nb_words)
-                                
-                yield x_one_hot, x_one_hot
-
+    def kl_loss(self, x, x_):
+        if self.comp_topk != None:
+            kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean_k) - K.exp(self.z_log_var), axis=-1)
+        else:
+            kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+        return self.kl_weight * kl_loss
 
 
 
@@ -1554,481 +289,222 @@ class CosineSim():
         self.model = Model([q_input, d_input], pred)
 
 
-class LSTM_Model():
-    def __init__(self, hidden_dim=300, latent_dim=128, max_len=10, emb_dim=200, nb_words=50000, emb=None):
-
-        self.max_len = max_len
+class S2S_AAE(object):
+    
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5, mode=1, enableWasserstein=False, enableS2S=True):
+        self.dim = dim
         self.nb_words = nb_words
-        q_input = Input(shape=(max_len,))
-        d_input = Input(shape=(max_len,))
-        mask = Masking(mask_value=0)
+        self.max_len = max_len
+        self.embedding_matrix = embedding_matrix
+        self.optimizer = optimizer
+        self.keep_rate_word_dropout = keep_rate_word_dropout
+        self.mode = mode
+        self.enableWasserstein = enableWasserstein
+        self.enableS2S = enableS2S
 
-        emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
+        self.build()
 
-        bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
-        dense1 = Dense(hidden_dim, activation = "tanh")
+    def build(self):
 
-        dense2 = Dense(latent_dim, activation = "tanh")
+        vae, enc, self.encoder = self.build_encoder()
+
+        dis = self.build_discriminator()
+
+        # assemple AAE
+        enc_inputs = enc.inputs[0]
+        z = enc(enc_inputs)
+
+        xpred = vae(vae.inputs)
+        zreal = normal_latent_sampling((self.dim[1],))(enc_inputs)
+        yreal = dis(zreal)
+        yfake = dis(z)
+        
+        self.model = Model(vae.inputs, fix_names([xpred, yfake, yreal], ["xpred", "yfake", "yreal"]))
+
+        # build adversarial model
+        generative_params = vae.trainable_weights
+
+        self.model = AdversarialModel(base_model=self.model,
+                                 player_params=[generative_params, dis.trainable_weights],
+                                 player_names=["generator", "discriminator"])
+
+        if self.mode == 1:
+            adversarial_optimizer = AdversarialOptimizerSimultaneous()
+        elif self.mode == 2:
+            adversarial_optimizer = AdversarialOptimizerAlternating()
 
 
-        self.q_embed = dense2(dense1(bilstm(mask(emb(q_input)))))
-        self.d_embed = dense2(dense1(bilstm(mask(emb(d_input)))))
+        rec_loss = "sparse_categorical_crossentropy" if not self.enableWasserstein else self.wasserstein_loss
 
-        concat = merge([self.q_embed, self.d_embed], mode="cos")
 
-        pred = Dense(1, activation='sigmoid')(concat)
+        self.model.adversarial_compile(adversarial_optimizer=adversarial_optimizer,
+                                  player_optimizers=[Adam(1e-4, decay=1e-4), Adam(1e-3, decay=1e-4)],
+                                  loss={"yfake": "binary_crossentropy", "yreal": "binary_crossentropy",
+                                        "xpred": rec_loss},
+                                  player_compile_kwargs=[{"loss_weights": {"yfake": 1e-2, "yreal": 1e-2, "xpred": 1}}] * 2)
 
-        self.encoder = Model(inputs=q_input, outputs=self.q_embed)
 
-        self.model = Model(inputs=[q_input, d_input], outputs=pred)
-        self.model.compile(loss='binary_crossentropy', optimizer='RMSprop', metrics=['accuracy'])
+    def wasserstein_loss(self, y_true, y_pred):
+        return K.mean(y_true * y_pred)
+
+    def build_encoder(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        encoder_inputs = Input(shape=(self.max_len,))
+        self.encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        mask_zero=True,
+                                        trainable=True)
+
+        encoder_lstm = GRU(hidden_dim, return_state=True)
+
+        x = self.encoder_embedding(encoder_inputs)
+        _, state = encoder_lstm(x)
+
+        mean = Dense(latent_dim)
+        var = Dense(latent_dim)
+
+        state_mean = mean(state)
+        state_var = var(state)
+
+        def sampling(args):
+            z_mean, z_log_var = args
+            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                      stddev=1)
+            return z_mean + K.exp(z_log_var / 2) * epsilon 
+
+        # state_z = Lambda(sampling, name="kl")([state_mean, state_var])
+        state_z = merge([state_mean, state_var], mode=lambda p: p[0] + K.random_normal(K.shape(p[0])) * K.exp(p[1] / 2),
+              output_shape=lambda p: p[0])
+
+        # return Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+
+    # def build_decoder(self):
+
+        # hidden_dim = self.dim[0]
+        # latent_dim = self.dim[1]
+
+        decoder_inputs = Input(shape=(self.max_len,), name="dec_input")
+        # state_inputs = Input(shape=(latent_dim,), name="dec_state_input")
+
+        latent2hidden = Dense(hidden_dim)
+        decoder_lstm = GRU(hidden_dim, return_sequences=True)
+        decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        
+        x = self.encoder_embedding(decoder_inputs)
+        decoder_outputs = decoder_lstm(x, initial_state=latent2hidden(state_z))
+        rec_outputs = decoder_dense(decoder_outputs)
+
+        return Model([encoder_inputs, decoder_inputs], rec_outputs), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+
+    def build_discriminator(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        latent_inputs = Input(shape=(latent_dim,), name="dis_latent_input")
+
+        latent2hidden = Dense(hidden_dim)
+        pred = Dense(1, activation='sigmoid', name="dis")(latent2hidden(latent_inputs))
+
+        return Model(latent_inputs, pred)
 
     def name(self):
-        return "bilstm"
 
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
+        model_name = "s2s_" if self.enableS2S else ""
+        loss_name = "aae_" if not self.enableWasserstein else "wae_"
 
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-
-                yield [q,d], df.label.values
-
-class BiLSTM():
-    def __init__(self, hidden_dim=300, latent_dim=128, q_max_len=10, d_max_len=15, emb_dim=200, nb_words=50000, emb=None, mode="cos", optimizer=RMSprop()):
-
-        self.q_max_len = q_max_len
-        self.d_max_len = d_max_len
-        self.nb_words = nb_words
-        q_input = Input(shape=(self.q_max_len,))
-        d_input = Input(shape=(self.d_max_len,))
-        mask = Masking(mask_value=0)
-
-        q_emb = emb
-        q_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
-        q_dense1 = Dense(hidden_dim, activation = "tanh")
-        q_dense2 = Dense(latent_dim, activation = "tanh")
-
-        d_emb = Embedding(nb_words, emb_dim, mask_zero=True) if emb == None else emb
-        d_bilstm = Bidirectional(LSTM(hidden_dim, name='lstm_1'))
-        d_dense1 = Dense(hidden_dim, activation = "tanh")
-        d_dense2 = Dense(latent_dim, activation = "tanh")
-
-
-        self.q_embed = q_dense2(q_dense1(q_bilstm(mask(q_emb(q_input)))))
-        self.d_embed = d_dense2(d_dense1(d_bilstm(mask(d_emb(d_input)))))
-
-        combine = Flatten()(merge([self.q_embed, self.d_embed], mode=mode))
-
-        pred = Dense(1, activation='sigmoid')(combine)
-
-        self.encoder = Model(inputs=q_input, outputs=self.q_embed)
-
-
-
-        self.model = Model(inputs=[q_input, d_input], outputs=pred)
-        # self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-        
-        self.model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
-
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.q_max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.d_max_len, True)
-
-                yield [q,d], df.label.values
-
-
-
-
-
-class MLP():
-    def __init__(self, input_dim):
-
-        que_input = Input(shape=(input_dim,))
-        doc_input = Input(shape=(input_dim,))
-        
-        
-
-        concat = merge([que_input, doc_input], mode="concat")
-
-
-        pred = Dense(1, activation='sigmoid')(concat)
-
-        self.model = Model(input=[que_input, doc_input], output=pred)
-        self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-class W2V_MLP():
-    def __init__(self, max_len, input_dim):
-
-        que_input = Input(shape=(max_len, input_dim,))
-        doc_input = Input(shape=(max_len, input_dim,))
-        
-        x = GlobalAveragePooling1D()(que_input)
-        y = GlobalAveragePooling1D()(doc_input)
-
-        concat = merge([x, y], mode="concat")
-
-
-        pred = Dense(1, activation='sigmoid')(concat)
-
-        self.model = Model(input=[que_input, doc_input], output=pred)
-        self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-class AVGPolling():
-    def __init__(self, max_len, emb_dim):
-        x_input = Input(shape=(max_len, emb_dim,))
-        avg = GlobalAveragePooling1D()(x_input)
-        self.model = Model(input=x_input, output=avg)
-
-
-
-# http://alexadam.ca/ml/2017/05/05/keras-vae.html
-class EMB_LSTM_VAE():
-    def __init__(self, vocab_size=50000, max_length=300, latent_rep_size=50):
-        self.encoder = None
-        self.decoder = None
-        self.sentiment_predictor = None
-        self.autoencoder = None
-        
-        self.max_length = max_length
-        self.vocab_size = vocab_size
-        self.latent_rep_size = latent_rep_size
-
-        x = Input(shape=(max_length,))
-        self.x_embed = Embedding(vocab_size, 100, input_length=max_length, mask_zero=True)(x)
-
-        vae_loss, encoded = self._build_encoder(self.x_embed, latent_rep_size=latent_rep_size, max_length=max_length)
-        self.encoder = Model(x, encoded)
-
-        encoded_input = Input(shape=(latent_rep_size,))
-
-        decoded = self._build_decoder(encoded_input, vocab_size, max_length)
-        self.decoder = Model(encoded_input, decoded)
-
-        self.model = Model(x, self._build_decoder(encoded, vocab_size, max_length))
-
-        self.model.compile(optimizer='Adam',
-                                 loss=vae_loss)
-        
-    def _build_encoder(self, x, latent_rep_size=200, max_length=300, epsilon_std=0.01):
-        h = LSTM(200, name='lstm_1')(x)
-
-
-        def sampling(args):
-            z_mean_, z_log_var_ = args
-            batch_size = K.shape(z_mean_)[0]
-            latent_dim = K.sahep(z_mean_)[1]
-            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=epsilon_std)
-            return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
-
-        z_mean = Dense(latent_rep_size, name='z_mean', activation='linear')(h)
-        z_log_var = Dense(latent_rep_size, name='z_log_var', activation='linear')(h)
-
-        def vae_loss(x, x_decoded_mean):
-            x = K.flatten(x)
-            x_decoded_mean = K.flatten(x_decoded_mean)
-            xent_loss = max_length * objectives.binary_crossentropy(x, x_decoded_mean)
-            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
-            return xent_loss + kl_loss
-
-        return (vae_loss, Lambda(sampling, output_shape=(latent_rep_size,), name='lambda')([z_mean, z_log_var]))
+        return "%s%sm%d_wd%.2f" % (model_name, loss_name, self.mode, self.keep_rate_word_dropout)
     
-    def _build_decoder(self, encoded, vocab_size, max_length):
-        
-        repeated_context = RepeatVector(max_length)(encoded)
-        h = LSTM(200, return_sequences=True, name='dec_lstm_1')(repeated_context)
-        decoded = TimeDistributed(Dense(vocab_size, activation='softmax'), name='decoded_mean')(h)
-        
-        return decoded
+    def word_dropout(self, x, unk_token):
 
+        x_ = np.copy(x)
+        rows, cols = np.nonzero(x_)
+        for r, c in zip(rows, cols):
+            if random.random() <= self.keep_rate_word_dropout:
+                continue
+            x_[r][c] = unk_token
 
-class VAE_BPE():
+        return x_
 
-    def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, max_len=10, emb=None, emb_dim=200, activation="relu"):
+class BinaryClassifier():
+    
+    def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max", mode=1):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
         self.nb_words = nb_words
-        self.activation = activation
-        self.emb_dim = emb_dim
         self.max_len = max_len
+        self.enableSeparate = enableSeparate
+        self.enableLSTM = enableLSTM
+        self.PoolMode = PoolMode
 
-        x = Input(shape=(self.max_len,))
+        query = Input(shape = (self.max_len,))
+        doc = Input(shape = (self.max_len,))
+
+        q_embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    mask_zero=True if self.enableLSTM else False,
+                    trainable=True)
+
+        d_embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    mask_zero=True if self.enableLSTM else False,
+                    trainable=True)
         
-        embed_layer = Embedding(self.nb_words, self.emb_dim, input_length=self.max_len) if emb == None else emb
+        q_bilstm = LSTM(hidden_dim, return_sequences=False)
+        d_bilstm = LSTM(hidden_dim, return_sequences=False)
+
+        Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
+
+        if self.enableLSTM:
+            query_sem = q_bilstm(q_embed_layer(query))
+            doc_sem = d_bilstm(d_embed_layer(doc)) 
+        else:
+            query_sem = Pooling(q_embed_layer(query))
+            doc_sem = Pooling(d_embed_layer(doc)) 
+
+        def exponent_neg_manhattan_distance(left, right):
+            ''' Helper function for the similarity estimate of the LSTMs outputs'''
+            return K.exp(-K.sum(K.abs(left-right), axis=1, keepdims=True))
 
 
-        emb_x = embed_layer(x)
+        malstm_distance = Merge(mode=lambda x: exponent_neg_manhattan_distance(x[0], x[1]), output_shape=lambda x: (x[0][0], 1))([query_sem, doc_sem])
 
-        vae_loss, encoded = self.build_encoder(emb_x)
-        self.encoder = Model(x, encoded)
+# #       concat > mul > cos
+#         # old
+#         cos = merge([query_sem, doc_sem], mode="concat")
+#         cos = BatchNormalization()(cos)
+#         cos = Dropout(0.2)(cos)
+#         # concat = Concatenate()([query_sem, doc_sem])
+#         # sub = Subtract()([query_sem, doc_sem])
+#         # mul = Multiply()([query_sem, doc_sem])
+#         # merge_all = merge([concat, sub, mul], mode="concat")
 
-        encoded_input = Input(shape=(self.latent_dim,))
 
-        decoded = self.build_decoder(encoded_input)
-        self.decoder = Model(encoded_input, decoded)
+#         pred = Dense(1, activation="sigmoid")(cos)
 
-        self.model = Model(x, self.build_decoder(encoded))
-
-        self.model.compile(optimizer='Adam',
-                                 loss=vae_loss)
+        self.model = Model(inputs = [query, doc] , outputs = malstm_distance)
+        # self.model.compile(optimizer = optimizer, loss = "binary_crossentropy", metrics=["accuracy"])
+        self.model.compile(optimizer = optimizer, loss = "mean_squared_error", metrics=["accuracy"])
         
-    def build_encoder(self, z):
-
-        z = Bidirectional(LSTM(self.hidden_dim, name='lstm_1'))(z)
-
-        def sampling(args):
-            z_mean_, z_log_var_ = args
-            batch_size = K.shape(z_mean_)[0]
-            latent_dim = K.shape(z_mean_)[1]
-            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1)
-            return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
-
-        z_mean = Dense(self.latent_dim, name='z_mean', activation='linear')(z)
-        z_log_var = Dense(self.latent_dim, name='z_log_var', activation='linear')(z)
-
-        def vae_loss(x, x_decoded_mean):
-            x = K.flatten(x)
-            x_decoded_mean = K.flatten(x_decoded_mean)
-            xent_loss = self.max_len * objectives.binary_crossentropy(x, x_decoded_mean)
-            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
-            return xent_loss + kl_loss
-
-        return (vae_loss, Lambda(sampling, output_shape=(self.latent_dim,), name='lambda')([z_mean, z_log_var]))
-    
-    def build_decoder(self, encoded):
-        repeated_context = RepeatVector(self.max_len)(encoded)
-        h = Bidirectional(LSTM(self.hidden_dim, return_sequences=True, name='dec_lstm_1'))(repeated_context)
-        decoded = TimeDistributed(Dense(self.nb_words, activation='softmax'), name='decoded_mean')(h)
-
-        return decoded
-    
-    def get_name(self):
-        return "vae_bpe_h%d_l%d_w%d_%s_ml%d" % (self.hidden_dim, self.latent_dim, self.nb_words, self.activation, self.max_len)
-
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
-
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
-
-                x = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                x_one_hot = to_categorical(x, self.nb_words)
-                x_one_hot = x_one_hot.reshape(batch_size, self.max_len, self.nb_words)
-                                
-                yield x, x_one_hot
-                
-
-
-class VAE_DSSM():
-
-    def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, activation="relu"):
-
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
-        self.nb_words = nb_words
-        self.activation = activation
-
-
-        x = Input(shape=(self.nb_words,))
-        enc_dense = Dense(self.hidden_dim, activation=self.activation)
-
-        emb_x = enc_dense(x)
-
-        vae_loss, encoded = self.build_encoder(emb_x)
-        self.encoder = Model(x, encoded)
-
-        encoded_input = Input(shape=(self.latent_dim,))
-
-        decoded = self.build_decoder(encoded_input)
-        self.decoder = Model(encoded_input, decoded)
-
-        self.model = Model(x, self.build_decoder(encoded))
-
-        self.model.compile(optimizer='Adam',
-                                 loss=vae_loss)
-        
-    def build_encoder(self, z):
-
-
-        def sampling(args):
-            z_mean_, z_log_var_ = args
-            batch_size = K.shape(z_mean_)[0]
-            latent_dim = K.shape(z_mean_)[1]
-            epsilon = K.random_normal(shape=(batch_size, latent_dim), mean=0., stddev=1)
-            return z_mean_ + K.exp(z_log_var_ / 2) * epsilon
-
-        z_mean = Dense(self.latent_dim, name='z_mean', activation='linear')(z)
-        z_log_var = Dense(self.latent_dim, name='z_log_var', activation='linear')(z)
-
-        def vae_loss(x, x_decoded_mean):
-            x = K.flatten(x)
-            x_decoded_mean = K.flatten(x_decoded_mean)
-            xent_loss = objectives.binary_crossentropy(x, x_decoded_mean)
-            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
-            return xent_loss + kl_loss
-
-        return (vae_loss, Lambda(sampling, output_shape=(self.latent_dim,), name='lambda')([z_mean, z_log_var]))
-    
-    def build_decoder(self, encoded):
-
-        h = Dense(self.hidden_dim, activation=self.activation)(encoded)
-#       output is 2D one-hot vector, sigmoid is appropirate
-        decoded = Dense(self.nb_words, activation='sigmoid', name='decoded_mean')(h)
-        
-        return decoded
-
-    def get_name(self):
-        return "vae_dssm_h%d_l%d_w%d_%s" % (self.hidden_dim, self.latent_dim, self.nb_words, self.activation)
-
-
-    def batch_generator(self, reader, train_data, tokeniser, batch_size, max_len, nb_words):
-        while True:
-            for df in reader:
-                q = df.q.tolist()
-#                 if train_data == "1M_EN_QQ_log":
-#                     d = [i.split("<sep>")[0] for i in df.d.tolist()]
-#                 else:
-#                     d = df.d.tolist()
-                
-                q = pad_sequences(tokeniser.texts_to_sequences(q), maxlen=max_len)
-                
-                q_one_hot = np.zeros((batch_size, nb_words))
-                for i in range(len(q)):
-                    q_one_hot[i][q[i]] = 1
-                    
-                
-                yield q_one_hot, q_one_hot
-
-
-
-class CLSM():
-
-    # K - hidden layer dimension
-    # L - latent dimension
-    # J - number of negative samples
-    # self.nb_words - feature number / nb_words
-    
-    def __init__(self, hidden_dim=300, latent_dim=128, FILTER_LENGTH=1, num_negatives=1,  nb_words=50005, activation="relu"):
-
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
-        self.nb_words = nb_words
-        self.activation = activation
-
-
-        self.num_negatives = num_negatives
-
-        # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
-        # The first dimension is None because the queries and documents can vary in length.
-        query = Input(shape = (None, self.nb_words))
-        pos_doc = Input(shape = (None, self.nb_words))
-        neg_docs = [Input(shape = (None, self.nb_words)) for j in range(self.num_negatives)]
-
-        query_conv = Convolution1D(self.hidden_dim, FILTER_LENGTH, padding = "same", input_shape = (None, self.nb_words), activation = "tanh")(query) # See equation (2).
-        query_max = Lambda(lambda x: K.max(x, axis = 1), output_shape = (self.hidden_dim, ))(query_conv) # See section 3.4.
-
-        query_sem = Dense(self.latent_dim, activation = "tanh", input_dim = self.hidden_dim)(query_max) # See section 3.5.
-
-        # The document equivalent of the above query model.
-        doc_conv = Convolution1D(self.hidden_dim, FILTER_LENGTH, padding = "same", input_shape = (None, self.nb_words), activation = "tanh")
-        doc_max = Lambda(lambda x: K.max(x, axis = 1), output_shape = (self.hidden_dim, ))
-        doc_sem = Dense(self.latent_dim, activation = "tanh", input_dim = self.hidden_dim)
-
-        pos_doc_conv = doc_conv(pos_doc)
-        neg_doc_convs = [doc_conv(neg_doc) for neg_doc in neg_docs]
-
-        pos_doc_max = doc_max(pos_doc_conv)
-        neg_doc_maxes = [doc_max(neg_doc_conv) for neg_doc_conv in neg_doc_convs]
-
-        pos_doc_sem = doc_sem(pos_doc_max)
-        neg_doc_sems = [doc_sem(neg_doc_max) for neg_doc_max in neg_doc_maxes]
-
-        # This layer calculates the cosine similarity between the semantic representations of
-        # a query and a document.
-        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
-        R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
-
-        concat_Rs = concatenate([R_Q_D_p] + R_Q_D_ns)
-        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
-
-        # In this step, we multiply each R(Q, D) value by gamma. In the paper, gamma is
-        # described as a smoothing factor for the softmax function, and it's set empirically
-        # on a held-out data set. We're going to learn gamma's value by pretending it's
-        # a single 1 x 1 kernel.
-        weight = np.array([1]).reshape(1, 1, 1)
-        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
-        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
-
-        # Finally, we use the softmax function to calculate P(D+|Q).
-        prob = Activation("softmax")(with_gamma) # See equation (5).
-
-        # We now have everything we need to define our model.
-        self.model = Model(inputs = [query, pos_doc] + neg_docs, outputs = prob)
-        self.model.compile(optimizer = "adadelta", loss = "categorical_crossentropy")
 
         self.encoder = Model(inputs=query, outputs=query_sem)
 
-    def batch_generator(self, reader, train_data, tokeniser, batch_size, max_len, nb_words):
-        while True:
-            for df in reader:
-                q = df.q.tolist()
-                if train_data == "1M_EN_QQ_log":
-                    d = [i.split("<sep>")[0] for i in df.d.tolist()]
-                else:
-                    d = df.d.tolist()
-                
-                q = pad_sequences(tokeniser.texts_to_sequences(q), maxlen=max_len)
-                d = pad_sequences(tokeniser.texts_to_sequences(d), maxlen=max_len)
-                
-                
-                q_one_hot = to_categorical(q, nb_words)   
-                q_one_hot = q_one_hot.reshape(batch_size, max_len, nb_words)
-                
-                d_one_hot = to_categorical(d, nb_words)   
-                d_one_hot = q_one_hot.reshape(batch_size, max_len, nb_words)
-                    
-                    
-                # negative sampling from positive pool
-                neg_d_one_hot = [[] for j in range(self.num_negatives)]
-                for i in range(batch_size):
-                    possibilities = list(range(batch_size))
-                    possibilities.remove(i)
-                    negatives = np.random.choice(possibilities, self.num_negatives, replace = False)
-                    for j in range(self.num_negatives):
-                        negative = negatives[j]
-                        neg_d_one_hot[j].append(d_one_hot[negative].tolist())
-                
-                y = np.zeros((batch_size, self.num_negatives + 1))
-                y[:, 0] = 1
-                
-                for j in range(self.num_negatives):
-                    neg_d_one_hot[j] = np.array(neg_d_one_hot[j])
-                
-                
-                yield [q_one_hot, d_one_hot] + [neg_d_one_hot[j] for j in range(self.num_negatives)], y
-       
-    
-    
+    def name(self):
+        return "binary_lstm" if self.enableLSTM else "binary_%s" % self.PoolMode
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max"):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -2037,7 +513,7 @@ class DSSM():
         self.max_len = max_len
         self.enableSeparate = enableSeparate
         self.enableLSTM = enableLSTM
-        mask = Masking(mask_value=0)
+        self.PoolMode = PoolMode
 
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
@@ -2049,24 +525,36 @@ class DSSM():
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
+                    name="q_embeding_layer",
+                    mask_zero=True if self.enableLSTM else False,
                     trainable=True)
         
-        bilstm = LSTM(hidden_dim, name='lstm_1', return_sequences=False)
+        bilstm = GRU(hidden_dim, name='q_gru', return_sequences=False)
 
         if enableSeparate:
-            d_embed_layer = emb2
-            d_bilstm = LSTM(hidden_dim, name='lstm_1')
+            d_embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    name="d_embed_layer",
+                    mask_zero=True if self.enableLSTM else False,
+                    trainable=True)
+            d_bilstm = GRU(hidden_dim, name="d_gru")
 
-
+        Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
 
         if self.enableLSTM:
-            query_sem = bilstm(mask(embed_layer(query)))
-            pos_doc_sem = bilstm(mask(embed_layer(pos_doc))) if not enableSeparate else d_bilstm(mask(d_embed_layer(pos_doc)))
-            neg_doc_sems = [bilstm(mask(embed_layer(neg_doc))) for neg_doc in neg_docs] if not enableSeparate else [d_bilstm(mask(d_embed_layer(neg_doc))) for neg_doc in neg_docs]
+            query_sem = bilstm(embed_layer(query))
+            pos_doc_sem = bilstm(embed_layer(pos_doc)) if not enableSeparate else d_bilstm(d_embed_layer(pos_doc))
+            neg_doc_sems = [bilstm(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [d_bilstm(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
         else:
-            query_sem = GlobalMaxPooling1D()(embed_layer(query))
-            pos_doc_sem = GlobalMaxPooling1D()(embed_layer(pos_doc)) if not enableSeparate else GlobalMaxPooling1D()(d_embed_layer(pos_doc))
-            neg_doc_sems = [GlobalMaxPooling1D()(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [GlobalMaxPooling1D()(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
+            query_sem = Pooling(embed_layer(query))
+            pos_doc_sem = Pooling(embed_layer(pos_doc)) if not enableSeparate else Pooling(d_embed_layer(pos_doc))
+            neg_doc_sems = [Pooling(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [Pooling(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
+
+
+        # def Manhattan_distance(A,B):
+            # return K.sum( K.abs( A-B),axis=1,keepdims=True)
 
 
 
@@ -2075,6 +563,10 @@ class DSSM():
         # a query and a document.
         R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
         R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
+        # R_Q_D_p = Merge(mode=lambda x:Manhattan_distance(query_sem, pos_doc_sem)) # See equation (4).
+        # R_Q_D_ns = [Merge(mode=lambda x:Manhattan_distance(query_sem, neg_doc_sem)) for neg_doc_sem in neg_doc_sems] # See equation (4).
+
+
 
         concat_Rs = concatenate([R_Q_D_p] + R_Q_D_ns)
         concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
@@ -2098,36 +590,69 @@ class DSSM():
 
     def name(self):
         if self.enableLSTM:
-            return "dssm_lstm2" if self.enableSeparate else "dssm_lstm"
+            return "dssm_gru2" if self.enableSeparate else "dssm_gru"
         else:
-            return "dssm2" if self.enableSeparate else "dssm"
+            return "dssm2_%s" % self.PoolMode if self.enableSeparate else "dssm_%s" % self.PoolMode
 
-    def initModel(self, sp, bpe_dict):
-        self.sp = sp
-        self.bpe_dict = bpe_dict
+class VRAE(object):
+    
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_weight=1, enableKL=False):
+        act = ELU()
+        self.kl_weight = kl_weight
+        self.enableKL = enableKL
 
-    def batch_generator(self, reader, train_data, batch_size):
-        while True:
-            for df in reader:
 
-                q = parse_texts_bpe(df.q.tolist(), self.sp, self.bpe_dict, self.max_len, True)
-                d = parse_texts_bpe(df.d.tolist(), self.sp, self.bpe_dict, self.max_len, True)
+        x = Input(batch_shape=(None, max_len))
 
-                # negative sampling from positive pool
-                neg = [[] for j in range(self.num_negatives)]
-                for i in range(batch_size):
-                    possibilities = list(range(batch_size))
-                    possibilities.remove(i)
-                    negatives = np.random.choice(possibilities, self.num_negatives, replace = False)
-                    for j in range(self.num_negatives):
-                        negative = negatives[j]
-                        neg[j].append(d[negative].tolist())
-                
-                y = np.zeros((batch_size, self.num_negatives + 1))
-                y[:, 0] = 1
-                
-                for j in range(self.num_negatives):
-                    neg[j] = np.array(neg[j])
-                
-                
-                yield [q, d] + [neg[j] for j in range(self.num_negatives)], y
+        embedding_layer = Embedding(nb_words, embedding_matrix[0].shape[-1], weights=[embedding_matrix],
+                                    input_length=max_len, trainable=True, mask_zero=True)
+        bilstm = LSTM(dim[0], return_sequences=False, recurrent_dropout=0.2)
+        hidden_layer = Dense(dim[0], activation='linear')
+        mean_layer = Dense(dim[1])
+        var_layer = Dense(dim[1])
+
+
+        h = embedding_layer(x)
+        h = bilstm(h)
+        # h = Dropout(0.2)(h)
+        h = hidden_layer(h)
+        h = act(h)
+        # h = Dropout(0.2)(h)
+        self.z_mean = mean_layer(h)
+        self.z_log_var = var_layer(h)
+
+        def sampling(args):
+            z_mean, z_log_var = args
+            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[-1]), mean=0.,
+                                      stddev=1)
+            return z_mean + K.exp(z_log_var / 2) * epsilon
+
+        z = Lambda(sampling, output_shape=(dim[1],))([self.z_mean, self.z_log_var])
+
+        # we instantiate these layers separately so as to reuse them later
+        repeated_context = RepeatVector(max_len)
+        decoder_h = LSTM(dim[0], return_sequences=True, recurrent_dropout=0.2)
+        softmax_layer = Dense(nb_words, activation='softmax')
+        decoder_mean = TimeDistributed(softmax_layer, name="rec")
+        decoder_kl = TimeDistributed(softmax_layer, name="kl")
+
+        h_decoded = decoder_h(repeated_context(z))
+        x_decoded_mean = decoder_mean(h_decoded)        
+        x_decoded_kl = decoder_kl(h_decoded)
+
+        
+        self.encoder = Model(x, self.z_mean) 
+        self.model = Model(x, [x_decoded_mean, x_decoded_kl])
+        # if mode in [3,4]:
+            # self.model.compile(optimizer=optimizer, loss=["categorical_crossentropy", self.kl_loss])
+        # else:
+        self.model.compile(optimizer=optimizer, loss=["sparse_categorical_crossentropy", self.kl_loss])
+
+    def name(self):
+        return "vrae_kl" if self.enableKL else "vrae"
+
+    def kl_loss(self, x, x_):
+
+        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+
+        return self.kl_weight * kl_loss

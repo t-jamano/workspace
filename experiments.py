@@ -3,6 +3,8 @@ from Models import *
 from FastModels import *
 from BatchGenerator import *
 import datetime
+import math
+
 
 #################### Arguments ####################
 def parse_args():
@@ -13,15 +15,16 @@ def parse_args():
     parser.add_argument('--model', type=str,
                         help='Model Name: dssm, vae_dssm')
 
-    parser.add_argument('--h', type=int, default=300,
+    parser.add_argument('--h', type=int, default=200,
                         help='Hidden Layer Dimension')
 
-    parser.add_argument('--l', type=int, default=128,
+    parser.add_argument('--l', type=int, default=100,
                         help='Latent/Encoded Dimension')
 
     parser.add_argument('--neg', type=int, default=1,
                         help='Number of negative instances to pair with a positive instance.')
-
+    parser.add_argument('--ml', type=int, default=10,
+                        help='Max Length')
     parser.add_argument('--path', type=str, default="/work/",
                         help='Path to dir')
 
@@ -37,6 +40,16 @@ def parse_args():
     parser.add_argument('--o', nargs='?', default='adam',
                         help='Specify an optimizer: adagrad, adam, rmsprop, sgd')
 
+    parser.add_argument('--pm', type=str, default='max', help='Pooling Mode: max or avg')
+    parser.add_argument('--fm', type=str, default='fair', help='Focus Mode: fair, pair or rec')
+
+    parser.add_argument('--m', type=int, default=1, help='Mode')
+
+    parser.add_argument('--lstm', type=int, default=0, help='LSTM model')
+
+    parser.add_argument('--af', type=str, default='logistic', help='anneal_function: logistic or linear')
+    parser.add_argument('--klrate', type=float, default=0.01, help='KL anneal rate')
+    parser.add_argument('--wd', type=float, default=0.75, help='keep_rate_word_dropout')
 
 
     return parser.parse_args()
@@ -45,18 +58,17 @@ def parse_args():
 
 if __name__ == '__main__':
 
-
-
-
 	args = parse_args()
-	print(args)
 
 	date_time = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
+	out_dir = "%sdata/out/" % args.path
+	enablePadding = True
+	tokenise_name = "50K_BPE"
 
+
+	
 	path = args.path
 	model = args.model
-	# dataset = args.dataset
-    # 30M_EN_pos_qd_log, 1M_EN_QQ_log2
 	train_data = args.dataset
 	hidden_dim = args.h
 	latent_dim = args.l
@@ -64,41 +76,32 @@ if __name__ == '__main__':
 	epochs = args.e
 	alpha = args.a
 	k = args.k
-
-	out_dir = "%sdata/out/" % path
-
-# 950000
-	# train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 25000000, "100M_query": 10000000, "30M_QD.txt": 20000000}
-
-	train_data_size = {"1M_EN_QQ_log": 950000, "30M_EN_pos_qd_log": 10000, "100M_query": 10000000, "30M_QD.txt": 150000, "30M_QD_lower2.txt":150000, "QueryLog": 4000000, "QueryQueryLog": 3600000}
-	eval_every_step = 1000
-	# eval_every_step = 10
-
-
-	# LETTER_GRAM_SIZE = 3 # See section 3.2.
-	# WINDOW_SIZE = 3 # See section 3.2.
-	# TOTAL_LETTER_GRAMS = 50005
-	# WORD_DEPTH = WINDOW_SIZE * TOTAL_LETTER_GRAMS # See equation (1).
-	# FILTER_LENGTH = 1 # We only consider one time step for convolutions.
-
-
-	nb_words = 50005
-	max_len = 10
-	max_len2 = 15
-	batch_size = args.b
-	# steps_per_epoch = args.i
-
-	# tokenise_name = "2M_50k_trigram"
-	tokenise_name = "50K_BPE"
-
-	# sys.stdout = open('/work/data/out/%s' % model_name, 'w')
-
+	pm = args.pm
+	fm = args.fm
 	optimizer=args.o
+	batch_size = args.b
+	max_len = args.ml
+	mode = args.m
+
+	enableLSTM = True if args.lstm == 1 else False
+	enableS2S = True if "s2s" in model else False
+
+	anneal_function = args.af
+	kl_rate = args.klrate
+	keep_rate_word_dropout = args.wd
+
+	eval_every_one_epoch = False
+	
+
+	print(args)
 
 	if optimizer == "adadelta":
-		optimizer = Adadelta(lr=2.)
+		optimizer = Adadelta()
 	elif optimizer == "rmsprop":
-		optimizer = RMSprop(lr=0.01)
+		optimizer = RMSprop()
+	elif optimizer == "adam":
+		optimizer = Adam()
+
 
 	# load pre-trained tokeniser
 	if "BPE" in tokenise_name:
@@ -106,16 +109,19 @@ if __name__ == '__main__':
 		sp = spm.SentencePieceProcessor()
 		sp.Load('%sdata/bpe/en.wiki.bpe.op50000.model' % path)
 		bpe = KeyedVectors.load_word2vec_format("%sdata/bpe/en.wiki.bpe.op50000.d200.w2v.bin" % path, binary=True)
-		bpe.index2word = [''] + bpe.index2word # add empty string
+		bpe.index2word = [''] + bpe.index2word + ['<sos>'] + ['<eos>']  # add empty string 
 		nb_words = len(bpe.index2word)
 		# word2index
 		bpe_dict = {bpe.index2word[i]: i for i in range(len(bpe.index2word))}
 		# construct embedding_matrix
-		embedding_matrix = np.concatenate([np.zeros((1, bpe.vector_size)), bpe.vectors]) # add zero vector for empty string (i.e. used for padding)
+		embedding_matrix = np.concatenate([np.zeros((1, bpe.vector_size)), bpe.vectors, np.zeros((2, bpe.vector_size))]) # add zero vector for empty string (i.e. used for padding)
 
+		embedding_layer = Embedding(nb_words,
+		                    embedding_matrix.shape[-1],
+		                    weights=[embedding_matrix],
+		                    input_length=max_len,
+		                    trainable=True)
 		
-
-
 	elif "trigram" in tokenise_name:
 
 		tokeniser = L3wTransformer()
@@ -124,386 +130,296 @@ if __name__ == '__main__':
 	# =================================== Initiate Model ==============================================
 
 	if model == "dssm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
-	if model == "dssm2":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, embedding_matrix2, optimizer=optimizer, enableSeparate=True)
-		run.initModel(sp, bpe_dict)
-	if model == "dssm_lstm":
-		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True)
-		run.initModel(sp, bpe_dict)
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, PoolMode=pm)
+	elif model == "dssm2":
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableSeparate=True, PoolMode=pm)
+	elif model == "dssm_lstm":
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True, PoolMode=pm)
+	elif model == "dssm_lstm2":
+		run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True, enableSeparate=True, PoolMode=pm)
+
+	elif model == "binary":
+		run = BinaryClassifier(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=enableLSTM, PoolMode=pm)
+
+	elif model == "vae_dssm2":
+		run = VAE_DSSM2(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer,  PoolMode=pm, FocusMode=fm, mode=mode)
+	elif model == "kate_dssm2":
+		run = VAE_DSSM2(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer,  PoolMode=pm, FocusMode=fm)
+	
+	elif model == "ssvae":
+		run = SSVAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer,  FocusMode=fm, mode=mode)
+	
+	elif model == "ssvae2":
+		run = SSVAE2(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer,  FocusMode=fm, mode=mode)
 
 
+	elif model == "s2s_aae":
+		run = S2S_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, keep_rate_word_dropout=keep_rate_word_dropout, mode=mode)
+	
+	elif model == "s2s_wae":
+		run = S2S_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, keep_rate_word_dropout=keep_rate_word_dropout, mode=mode, enableWasserstein=True)
 
-	elif model == "bilstm":
-		run = LSTM_Model(hidden_dim, latent_dim, nb_words=nb_words, max_len=max_len, emb=embedding_matrix)
-		run.initModel(sp, bpe_dict)
-	elif model == "bilstm2":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_matrix)
-		run.initModel(sp, bpe_dict)
-	elif model == "bilstm2_cos":
-		run = BiLSTM(hidden_dim, latent_dim, nb_words=nb_words, q_max_len=max_len, d_max_len=max_len2, emb=embedding_matrix, mode="cos")
-		run.initModel(sp, bpe_dict)
+
+	elif model == "aae":
+		run = S2S_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, keep_rate_word_dropout=keep_rate_word_dropout, mode=mode, enableS2S=False)
+	
+	elif model == "wae":
+		run = S2S_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, keep_rate_word_dropout=keep_rate_word_dropout, mode=mode, enableWasserstein=True, enableS2S=False)
 	
 
-	elif model == "vae_dssm":
-		run = VAE_DSSM(hidden_dim, latent_dim, nb_words)	
-	elif model == "vae_bpe":
-		#TODO Frozen or Trainable embedding option
-		run = VAE_BPE(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix)
-		run.initModel(sp, bpe_dict)
 
-
-
+	# elif model == "vae":
+	# 	run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, optimizer=optimizer, PoolMode=pm, kl_weight=kl_weight)
+	# elif model == "kate":
+	# 	run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, PoolMode=pm, kl_weight=kl_weight)
+	# elif model == "kate2":
+	# 	run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False, PoolMode=pm, kl_weight=kl_weight)
+	# elif model == "bowvae":
+	# 	run = BOW_VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer,  PoolMode=pm)
 
 
 	elif model == "vae":
-		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
-	elif model == "kate":
-		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
-	elif model == "kate2":
-		run = VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer, enableKL=False)
+		run = Seq2Seq(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, kl_rate=kl_rate, keep_rate_word_dropout=keep_rate_word_dropout, mode=1, enableKL=False, enableS2S=False)
+	elif model == "vae_kl":
+		run = Seq2Seq(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, kl_rate=kl_rate, keep_rate_word_dropout=keep_rate_word_dropout, mode=1, enableKL=True, enableS2S=False)
+
+	elif model == "seq2seq_ori":
+		run = Seq2Seq(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, kl_rate=kl_rate, keep_rate_word_dropout=keep_rate_word_dropout, mode=1, enableKL=False, enableS2S=True)
 	
+	elif model == "seq2seq":
+		run = Seq2Seq(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, kl_rate=kl_rate, keep_rate_word_dropout=keep_rate_word_dropout, mode=1)
+	
+	elif model == "s2s_dssm":
+		run = Seq2Seq(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, kl_rate=kl_rate, keep_rate_word_dropout=keep_rate_word_dropout, mode=mode)
 
 
 
-
-	elif model == "vdsh":
-		run = VDSH(nb_words, max_len, [embedding_matrix, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, optimizer=optimizer)
-		run.encoder._make_predict_function()
-		graph = tf.get_default_graph()
-	elif model == "vdsh_kate":
-		run = VDSH(nb_words, max_len, [embedding_matrix, bpe2.get_keras_embedding(True)], [hidden_dim, latent_dim], batch_size, k, "kcomp", optimizer=optimizer)
-		
-	elif model == "seqvae":
-		run = SeqVAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer, word_dropout_prob=1, kl_weight=1)
-
-
-
-
-	elif model == "vae_lstm":
-		run = VAE_LSTM(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer)
-	elif model == "kate_lstm":
-		run = VAE_LSTM(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer=optimizer)
-
-
-
-	elif model == "kate2_bpe":
-		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp")
-		run.initModel(sp, bpe_dict, bpe.index2word)
-	elif model == "kate2_bpeg":
-		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
-		run.initModel(sp, bpe_dict)
-		run.encoder._make_predict_function()
-		graph = tf.get_default_graph()
-	elif model == "kate2_bpe_adam":
-		run = KATE3D(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
-
-	elif model == "aae":
-		run = AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp")
-		run.initModel(sp, bpe_dict)
-
-	elif model == "kate1_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k)
-		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qd":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qd2":
-		run = VarAutoEncoderQD2(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qd3_dssm":
-		run = VarAutoEncoderQD3(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", alpha=alpha, optimizer=optimizer)
-		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qdc":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableCross=True)
-		run.initModel(sp, bpe_dict)
-	elif model == "kate2_qdm":
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableMemory=True)
-		run.initModel(sp, bpe_dict)
-	elif model in ["kate2_qdg1", "kate2_qdg2"]:
-		run = VarAutoEncoderQD(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], k, "kcomp", enableGAN=True)
-		run.initModel(sp, bpe_dict)
-		if model == "kate2_qdg2":
-			run.discriminator.trainable = False
-		run.encoder._make_predict_function()
-		graph = tf.get_default_graph()
-			
+	isPairModel = ["dssm", "dssm2", "dssm_lstm", "dssm_lstm2", "vae_dssm2", "kate_dssm2",]
+	isBinaryModel = ["binary"]
+	isHybridModel = [ "ssvae", "ssvae2", "s2s_dssm"]
 
 	run.encoder._make_predict_function()
 	graph = tf.get_default_graph()
 
-	model_name = "%s_%s_%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s" % (model, train_data, date_time, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name)
+	model_name = "%s_%s_%s_h%d_l%d_k%d_n%d_ml%d_w%d_b%d_e%d_a%.1f_%s_%s" % (run.name(), train_data, date_time, hidden_dim, latent_dim, k, num_negatives, max_len, nb_words, batch_size, epochs, alpha, optimizer, tokenise_name)
 
 	
-
 	# =================================== Get testing data ==============================================
+	test_set = []
+	for i in ["MayFlower", "JuneFlower", "JulyFlower", "sts", "quora", "para"]:
+		df, qrel = get_test_data(i, path)
+		q_ = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding)
+		d_ = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding)
+		test_set.append([q_, d_, qrel, df, i])
 
-
-	df_may, qrel_may = get_test_data("MayFlower", path)
-	df_june, qrel_june = get_test_data("JuneFlower", path)
-	df_july, qrel_july = get_test_data("JulyFlower", path)
-
-
-	# if model in ["kate"]:
-	# 	enablePadding = True
-
-	# 	q_may = to_2D_one_hot(parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-	# 	d_may = to_2D_one_hot(parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-
-	# 	q_june = to_2D_one_hot(parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-	# 	d_june = to_2D_one_hot(parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-
-	# 	q_july = to_2D_one_hot(parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-	# 	d_july = to_2D_one_hot(parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding=enablePadding), nb_words)
-
-	# else:
-
-	enablePadding = True
-
-	q_may = parse_texts_bpe(df_may.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_may = parse_texts_bpe(df_may.d.tolist(), sp, bpe_dict, max_len, enablePadding)
-
-	q_june = parse_texts_bpe(df_june.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_june = parse_texts_bpe(df_june.d.tolist(), sp, bpe_dict, max_len, enablePadding)
-
-	q_july = parse_texts_bpe(df_july.q.tolist(), sp, bpe_dict, max_len, enablePadding)
-	d_july = parse_texts_bpe(df_july.d.tolist(), sp, bpe_dict, max_len, enablePadding)
-
-
-	test_set = [[q_may, d_may, qrel_may, df_may, "MayFlower"], [q_june, d_june, qrel_june, df_june, "JuneFlower"], [q_july, d_july, qrel_july, df_july, "JulyFlower"]]
-
-	# test_set = [[q_july, d_july, qrel_july, df_july, "JulyFlower"]]
-
-	if model in ["vae", "kate", "kate2"]:
-		reader = get_reader(train_data, path, batch_size=batch_size)
-		idx = int(len(reader) - ( len(reader) % batch_size))
-
-		batches = int(idx / (batch_size * 1.0))
-		val_idx = int(0.1 * batches) * batch_size
-		# print(idx, val_idx, batches)
-
-		x_train = parse_texts_bpe(reader.q.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
-		x_val = parse_texts_bpe(reader.q.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
 		
-		y_train = x_train
-		y_val = x_val
+	# Read pair data
+	if model in isPairModel:
+		train_data_dir = '%sdata/train_data/%s.q.npy' % (path,train_data)
 
-
-		print("Train %d : Val %d" % (len(x_train), len(x_val)))
-
-	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
-		train_data_dir = '%sdata/train_data/%s.npy' % (path,train_data)
-
-		if os.path.exists(train_data_dir):
-			x_train = np.load(train_data_dir)
-			x_train = x_train[:100]
-		else:
-			reader = get_reader(train_data, path)
-			x_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
-		
-		y_train =[np.expand_dims(x_train, axis=-1), np.expand_dims(x_train, axis=-1)]
-		if model in ["seqvae", "seqvae2"]:
-			x_train = [x_train, x_train]
-
-	elif model in ["bilstm", "dssm", "dssm2", "dssm_lstm"]:
-		
 		if os.path.exists(train_data_dir):
 			q_train = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
 			d_train = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
-			q_train = q_train[:100]
-			d_train = d_train[:100]
+
+			train_data_dir = '%sdata/train_data/%s.label.npy' % (path,train_data)
+			if os.path.exists(train_data_dir):
+				y_train = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))
+			# for feaytest
+			# q_train = q_train[:1000]
+			# d_train = d_train[:1000]
 
 		else:
 			reader = get_reader(train_data, path)
 			q_train = parse_texts_bpe(reader.q.tolist(), sp, bpe_dict, max_len, enablePadding=True)
 			d_train = parse_texts_bpe(reader.d.tolist(), sp, bpe_dict, max_len, enablePadding=True)
-		
-		if "bilstm" in model:
-			y_train = np.concatenate([np.ones(len(q_train)), np.zeros(len(q_train))])
 
-		else:
-			y_train = np.zeros((len(q_train), 2))
-			y_train[:, 0] = 1
+	elif model in isBinaryModel:
 
-
-	elif "vdsh" in model :
-
-		reader = get_reader(train_data, path)
-		idx = int(len(reader) - ( len(reader) % batch_size))
-		batches = int(idx / (batch_size * 1.0))
-		val_idx = int(0.1 * batches) * batch_size
-
-		q_train = parse_texts_bpe(reader.q.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
-		d_train = parse_texts_bpe(reader.d.tolist()[:idx - val_idx], sp, bpe_dict, max_len, enablePadding=True)
-
-		q_val = parse_texts_bpe(reader.q.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
-		d_val = parse_texts_bpe(reader.d.tolist()[idx - val_idx: idx], sp, bpe_dict, max_len, enablePadding=True)
+		q_train = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
+		d_train = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
+		_y_train = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))
 
 
-		idx_train = np.arange(len(q_train))
-		shuffle(idx_train)
+	elif model in isHybridModel:
 
-		idx_val = np.arange(len(q_val))
-		shuffle(idx_val)
+		q_enc_inputs = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
+		q_dec_outputs = np.load('%sdata/train_data/%s.q.do.npy' % (path,train_data))
+		q_dec_inputs = np.load('%sdata/train_data/%s.q.di.npy' % (path,train_data))
 
+		d_enc_inputs = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
+		d_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
+		d_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
 
-		
+		q_train = q_enc_inputs
 
-		q_train = np.concatenate([q_train, q_train])
-		d_train = np.concatenate([d_train, d_train[idx_train]])
+	# Read unsuperivsed data
+	else:
 
-		idx = np.arange(len(q_val))
-		shuffle(idx)
+		train_data_dir = '%sdata/train_data/%s.q.npy' % (path,train_data)
+		if os.path.exists(train_data_dir):
 
-		q_val = np.concatenate([q_val, q_val])
-		d_val = np.concatenate([d_val, d_val[idx_val]])
+			q_enc_inputs = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
 
-		x_train = [q_train, d_train]
-		y_train =[q_train, np.concatenate([np.ones(int(len(q_train)/2.0)), np.zeros(int(len(q_train)/2.0))])]
+			# Q > D models
+			if model in ["seq2seq", "seq2seq_ori", "s2s_aae", "s2s_wae"]:
+				q_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
+				q_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
 
-		x_val = [q_val, d_val]
-		y_val = [q_val, np.concatenate([np.ones(int(len(q_val)/2.0)), np.zeros(int(len(q_val)/2.0))])]
+			# Q > Q models
+			elif model in ["aae", "wae", "vae", "vae_kl"]:
+				q_dec_outputs = np.load('%sdata/train_data/%s.q.do.npy' % (path,train_data))
+				q_dec_inputs = np.load('%sdata/train_data/%s.q.di.npy' % (path,train_data))
 
-		# print("Train %d : Val %d" % (len(x_train), len(x_val)))
+			# q_train = q_enc_inputs[:1000]
+			# q_enc_inputs = q_enc_inputs[:1000]
+			# q_dec_outputs = q_dec_outputs[:1000]
+			# q_dec_inputs = q_dec_inputs[:1000]
+
+			q_train = q_enc_inputs
+
 
 
 	print("============Start Training================")
-	cosine = CosineSim(latent_dim)
+
+	
+	best_auc_score = 0
+	step = 100 * batch_size # consider to increase 100 due to slow inference time.
+
+	all_steps = int(len(q_train) / step) + 1
+	may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
+
+	for epoch in range(epochs):
+		step_count = 0
+		for i in range(0, len(q_train), step):
+
+			if model in isPairModel:
+				# TODO separate train and validation set here, important
+				_q_train = q_train[i: i + step]
+				_d_train = d_train[i: i + step]
+
+				idx = np.arange(len(_q_train))
+				shuffle(idx)
+
+				_y_train = np.zeros((len(_q_train), 2))
+				_y_train[:, 0] = 1
+
+				x_train = [_q_train, _d_train, _d_train[idx]]
+				if model in ["dssm", "dssm2", "dssm_lstm", "dssm_lstm2"]:
+					y_train = _y_train
+				else:
+					y_train = [np.expand_dims(_q_train, axis=-1), np.expand_dims(_d_train, axis=-1), np.expand_dims(_d_train[idx], axis=-1), np.expand_dims(_d_train, axis=-1)] + [_y_train]
+			
+			elif model in isHybridModel:
+
+				q_enc_inputs_ = q_enc_inputs[i: i + step]
+				q_dec_inputs_ = q_dec_inputs[i: i + step]
+				q_dec_outputs_ = q_dec_outputs[i: i + step]
+
+				d_enc_inputs_ = d_enc_inputs[i: i + step]
+				d_dec_inputs_ = d_dec_inputs[i: i + step]
+				d_dec_outputs_ = d_dec_outputs[i: i + step]
+
+				idx = np.arange(len(q_enc_inputs_))
+				shuffle(idx)
+
+				_y_train = np.zeros((len(q_enc_inputs_), 2))
+				_y_train[:, 0] = 1
 
 
-	if model in ["vae", "kate", "vdsh", "vdsh_kate", "kate2"]:
-		try:
-			hist = run.model.fit(x_train, y_train,
-						        shuffle=True,
-						        epochs=epochs,
-						        verbose=0,
-						        batch_size=batch_size,
-						        validation_data=(x_val, y_val),
-						        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
-						                    # TQDMCallback(),
-						                    # EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
-						                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-						                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-						                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
-						                    KL_Annealing(run)
-						                  ]
-						        )
-		except Exception as e:
-				print(e)
-				pass
-	elif model in ["dssm", "dssm2", "dssm_lstm", "bilstm"]:
+				# x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx], q_dec_inputs_, d_dec_inputs_, d_dec_inputs_[idx]]
+				# y_train = [np.expand_dims(q_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_[idx], axis=-1), _y_train]
+				if model == "ssvae":
+					x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx], d_dec_inputs_, d_dec_inputs_[idx]]
+					y_train = [np.expand_dims(d_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_[idx], axis=-1), _y_train]
+				elif model == "ssvae2":
+					x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx]]
+					y_train = [np.expand_dims(q_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_[idx], axis=-1), _y_train]
+				
+				elif model == "s2s_dssm":
+					if mode in [4,5,7]:
+						x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx], run.word_dropout(d_dec_inputs_, bpe_dict['<unk>']), run.word_dropout(q_dec_inputs_, bpe_dict['<unk>']), run.word_dropout(q_dec_inputs_, bpe_dict['<unk>'])]
+						y_train = [np.expand_dims(d_dec_outputs_, axis=-1), np.expand_dims(q_dec_outputs_, axis=-1), np.expand_dims(q_dec_outputs_, axis=-1), np.ones((len(d_dec_outputs_))), _y_train]
+					if mode in [8]:
+						x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx], run.word_dropout(q_dec_inputs_, bpe_dict['<unk>'])]
+						y_train = [np.expand_dims(q_dec_outputs_, axis=-1), np.expand_dims(q_dec_outputs_, axis=-1), np.ones((len(d_dec_outputs_)))]
+					else:
+						x_train = [q_enc_inputs_, d_enc_inputs_, d_enc_inputs_[idx], run.word_dropout(q_dec_inputs_, bpe_dict['<unk>']), run.word_dropout(d_dec_inputs_, bpe_dict['<unk>']), run.word_dropout(d_dec_inputs_[idx], bpe_dict['<unk>'])]
+						y_train = [np.expand_dims(q_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_, axis=-1), np.expand_dims(d_dec_outputs_[idx], axis=-1), np.ones((len(d_dec_outputs_))), _y_train]
 
-		best_auc_score = 0
-		for epoch in range(epochs):
 
-			idx = np.arange(len(q_train))
-			shuffle(idx)
 
-			if "bilstm" in model:
-				x_train = [np.concatenate([q_train, q_train]), np.concatenate([d_train, d_train[idx]])]
+			elif model in isBinaryModel:
+				_q_train = q_train[i: i + step]
+				_d_train = d_train[i: i + step]
+				x_train = [_q_train, _d_train]
+				y_train = _y_train[i: i + step]
+
 			else:
-				x_train = [q_train, d_train, d_train[idx]]
+
+				# if model == "bowvae":
+				# 	tmp = toBOW(q_enc_inputs[i: i + step], nb_words)
+				# 	y_train =[tmp, tmp]
+
+				x_train = [q_enc_inputs[i: i + step], q_dec_inputs[i: i + step]]
+
+				dropout_x_train = run.word_dropout(x_train[1], bpe_dict['<unk>'])
+				x_train[1] = dropout_x_train
+
+
+				if model in ["s2s_aae", "aae"]:
+					y_train = [tmp, np.ones((len(tmp), 1)), np.zeros((len(tmp), 1)), tmp, np.zeros((len(tmp), 1)), np.ones((len(tmp), 1))]
+
+				elif model in ["s2s_wae", "wae"]:
+					tmp = to_categorical(q_dec_outputs[i: i + step], nb_words).reshape(len(q_enc_inputs[i: i + step]), max_len, nb_words)
+					y_train = [tmp, np.ones((len(tmp), 1)), np.zeros((len(tmp), 1)), tmp, np.zeros((len(tmp), 1)), np.ones((len(tmp), 1))]
+
+				elif model in ["vae", "kate", "vae_kl", "kate_kl"]:
+					tmp = np.expand_dims(q_dec_outputs[i: i + step], axis=-1)
+					y_train = [tmp, np.ones((len(tmp)))]
+
+
+			if hasattr(run, 'enableKL'):
+				if run.enableKL:
+					kl_weight = kl_anneal_function(anneal_function, step_count, kl_rate, int(all_steps/2)+1)
+					x_train = x_train + [np.array([kl_weight] * len(x_train[0]))]
+
 
 			t1 = time()
+
 			hist = run.model.fit(x_train, y_train,
 						        shuffle=True,
 						        epochs=1,
 						        verbose=0,
 						        batch_size=batch_size,
-						        validation_split=0.2,
+						        validation_split=0.2, # change to valication_data=(x_val, y_val)
 						        )
+
+
+			losses = ', '.join([ "%s = %f" % (k, hist.history[k][-1]) for k in hist.history])
+
 			t2 = time()
-			may_ndcg, june_ndcg, july_auc = evaluate(run, test_set)
-			print_output = '%s, Epoch %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (run.name(), epoch, t2-t1 , may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], hist.history['val_loss'][-1])
-
-			print(print_output)
-			with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
-				myfile.write(print_output)
-
-			if july_auc > best_auc_score:
-				best_auc_score = july_auc
-				run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
-				run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
-
-
-	elif model in ["vae_lstm", "kate_lstm", "seqvae", "seqvae2"]:
-		# try:
-		hist = run.model.fit(x_train, y_train,
-					        shuffle=True,
-					        epochs=epochs,
-					        verbose=0,
-					        batch_size=batch_size,
-					        validation_split=0.2,
-					        callbacks=[ ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=0.01),
-					                    # TQDMCallback(),
-					                    # EarlyStopping(monitor='val_loss', min_delta=1e-5, patience=5, verbose=1, mode='auto'),
-					                    CustomModelCheckpoint(run.encoder, '%sdata/models/fastModels/%s.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-					                    CustomModelCheckpoint(run.model, '%sdata/models/fastModels/%s.encoder.h5' % (path,model_name), monitor='val_loss', save_best_only=True, mode='auto'),
-					                    EvaluationCheckpoint(run, cosine, test_set, model_name, path, graph),
-					                    # KL_Annealing(run)
-					             
-					                  ]
-					        )
-		# except Exception as e:
-		# 		print(e)
-		# 		pass
-	else:
-
-		best_auc_score = 0
-
-		iterations = int(train_data_size[train_data] / batch_size)
-		for epoch in range(epochs):		
-
-
-	# 		Run models that cannot fit all training dataset into memory
-			# restart the reader thread
-			reader = get_reader(train_data, path, batch_size=batch_size)
-			reader2 = get_reader(train_data, path, batch_size=batch_size)
-
 			
-			for iteration in range(int(iterations / eval_every_step)):
+			if not eval_every_one_epoch:
+				t3 = time()
+				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+				t4 = time()
 
-				
-				try:
-					if model in ["kate2_qdg1", "kate2_qdg2", "kate2_bpeg"]:
-						t1 = time()
-						hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-						hist_dis = run.discriminator.fit_generator(run.batch_GAN_generator(reader2, train_data, batch_size, graph), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-						t2 = time()
-						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history] + [ "%s = %.4f" % (k, hist_dis.history[k][-1]) for k in hist_dis.history])
-						print(losses)
 
-					else:
-						t1 = time()
+			print_output = '%s, Epoch %d, Iteration %d,  [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (run.name(), epoch, i + step, t2-t1 , t4-t3, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, hist.history['loss'][-1], hist.history['val_loss'][-1])
+			file_output = '%s, Epoch %d, Iteration %d, [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, %s \n' % (run.name(), epoch, i + step, t2-t1 , t4-t3, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, losses)
 
-						hist = run.model.fit_generator(run.batch_generator(reader, train_data, batch_size), steps_per_epoch=eval_every_step, epochs=1, verbose=0)       
-						t2 = time()
-						losses = ', '.join([ "%s = %.4f" % (k, hist.history[k][-1]) for k in hist.history])
 
-					may_ndcg, june_ndcg, july_auc = evaluate(run, test_set)
+			best_auc_score = write_to_files(run, print_output, file_output, path, model_name, july_auc, best_auc_score, model)
 
-					# generate output
-					# run.generate_output(q_july, d_july)
-
-					
-
-					print_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, Loss = %.4f, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, hist.history['loss'][-1], time()-t2)
-					file_output = '%s_a%.1f_k%d, Epoch %d, Iteration %d, [%.1f s], May = %.4f, June = %.4f, July = %.4f, %s, [%.1f s] \n' % (model, alpha, k, epoch, (iteration+1)*eval_every_step, t2-t1, may_ndcg, june_ndcg, july_auc, losses, time()-t2)
-
-					print(print_output)
-					with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
-						myfile.write(file_output)
+			step_count = step_count + 1
 
 
 
-					if july_auc > best_auc_score:
-						best_auc_score = july_auc
-						run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
-						run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
-
-
-				except Exception as e:
-					print(e)
-					pass
+		if eval_every_one_epoch:
+			t3 = time()
+			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+			t4 = time()
+			print_output = '%s, Epoch %d, Iteration %d,  [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (run.name(), epoch, i + step, t2-t1 , t4-t3, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, hist.history['loss'][-1], hist.history['val_loss'][-1])
+			file_output = '%s, Epoch %d, Iteration %d, [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, %s \n' % (run.name(), epoch, i + step, t2-t1 , t4-t3, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, losses)
+			best_auc_score = write_to_files(run, print_output, file_output, path, model_name, july_auc, best_auc_score, model)
+			
