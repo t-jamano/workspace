@@ -1,116 +1,6 @@
 from Models import *
 
 
-class AdversarialAutoencoder(object):
-    
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, PoolMode="max", trainMode=1):
-        self.dim = dim
-        self.embedding_matrix = embedding_matrix
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.max_len = max_len
-        self.nb_words = nb_words
-        self.optimizer = optimizer
-        self.kl_weight = kl_weight
-        self.enableKL = True if kl_weight == 0 else False
-        self.PoolMode = PoolMode
-        self.trainMode = trainMode
-        
-        
-        self.model, self.train_encoder, self.encoder, self.discriminator = self.build()
-        
-        if self.trainMode == 1:
-            for layer in self.discriminator.layers:
-                layer.trainable=False
-        
-        self.discriminator.compile(loss='binary_crossentropy',
-            optimizer=optimizer,
-            metrics=['accuracy'])
-        
-        
-
-        self.model.compile(loss=['sparse_categorical_crossentropy', "binary_crossentropy"],
-            loss_weights=[0.9, 0.1],
-            optimizer=optimizer)
-
-    def name(self):
-        return "aae_%s_%d" % (self.PoolMode, self.trainMode)
-
-    def build(self):
-        
-        e_input = Input(shape=(self.max_len,), name="enc_input")
-        e_input2 = Input(shape=(self.max_len,), name="enc_input2")
-
-        emb = Embedding(self.nb_words,
-                            self.embedding_matrix.shape[-1],
-                            weights=[self.embedding_matrix],
-                            input_length=self.max_len,
-                            mask_zero=True,
-                            trainable=True)
-        
-        rnn = GRU(self.dim[0], name='lstm_1', return_sequences=False, return_state=True)
-
-        h = emb(e_input)
-        _, h = rnn(h)
-        mu = Dense(self.dim[1])
-        log_var = Dense(self.dim[1])
-        h_mu = mu(h)
-        h_log_var = log_var(h)
-        z = merge([h_mu, h_log_var],
-                mode=lambda p: p[0] + K.random_normal(K.shape(p[0])) * K.exp(p[1] / 2),
-                output_shape=lambda p: p[0])
-        
-        
-        h2 = emb(e_input2)
-        _, h2 = rnn(h2)
-        h2_mu = mu(h2)
-        
-        
-        d_input = Input(shape=(self.max_len,), name="dec_input")
-        
-        d_latent2hidden = Dense(self.dim[0], activation='relu')
-        d_lstm = GRU(self.dim[0], return_sequences=True)
-        dec_embedding_layer = Embedding(self.nb_words,
-                                    self.embedding_matrix.shape[-1],
-#                                     weights=[self.embedding_matrix],
-                                    input_length=self.max_len,
-                                    mask_zero=True,
-                                    trainable=True)
-
-        softmax_layer = Dense(self.nb_words, activation="softmax")
-        d_output2vocab = TimeDistributed(softmax_layer, name="rec")
-        
-        
-        h_z = d_latent2hidden(z)
-        
-        d_embed_input = dec_embedding_layer(d_input)
-        outputs = d_lstm(d_embed_input, initial_state=[h_z])
-        x_ = d_output2vocab(outputs)
-        
-        
-        
-        
-
-        z_input = Input(shape=(self.dim[1],))
-        h1 = Dense(200, input_dim=self.dim[1])
-        fc = Dense(1, activation="sigmoid", name="dis")
-
-        pred = fc(h1(z_input))
-        
-        discriminator = Model(z_input, pred)
-        
-        
-        
-        gan_pred = fc(h1(z))
-        
-        train_encoder = Model(e_input, z)
-        encoder = Model(e_input, h_mu)
-        
-        vae = Model([e_input, d_input], [x_, gan_pred])
-        
-        return vae, train_encoder, encoder, discriminator
-
 
 class VAE_DSSM2(object):
     
@@ -317,87 +207,11 @@ class VAE_LSTM(object):
         return z_mean + K.exp(z_log_var / 2) * epsilon
 
 
-class BOW_VAE(object):
+
+
+class Seq2Seq():
     
-
-    def __init__(self, input_size, max_len, embedding_matrix, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, PoolMode="max"):
-        self.input_size = input_size
-        self.dim = dim
-        self.embedding_matrix = embedding_matrix
-        self.comp_topk = comp_topk
-        self.ctype = ctype
-        self.epsilon_std = epsilon_std
-        self.max_len = max_len
-        self.nb_words = input_size
-        self.optimizer = optimizer
-        self.kl_weight = kl_weight
-        self.enableKL = True if kl_weight == 0 else False
-        self.PoolMode = PoolMode
-        self.build()
-
-    def build(self):
-        act = 'tanh'
-        input_layer = Input(shape=(self.max_len,))
-        emb_layer = Embedding(self.nb_words,
-                            self.embedding_matrix.shape[-1],
-                            weights=[self.embedding_matrix],
-                            input_length=self.max_len,
-                            trainable=True)
-
-        hidden_layer1 = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-        
-        Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
-
-        h1 = Pooling(emb_layer(input_layer))
-        
-        h1 = hidden_layer1(input_layer)
-
-        self.z_mean = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-        self.z_log_var = Dense(self.dim[1], kernel_initializer='glorot_normal')(h1)
-
-        if self.comp_topk != None:
-            self.z_mean_k = KCompetitive(self.comp_topk, self.ctype)(self.z_mean)
-            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean_k, self.z_log_var])
-        else:
-            encoded = Lambda(self.sampling, output_shape=(self.dim[1],))([self.z_mean, self.z_log_var])
-
-
-        decoder_h = Dense(self.dim[0], kernel_initializer='glorot_normal', activation=act)
-
-        hidden2vocab = Dense(self.nb_words, activation='sigmoid', name="rec")
-        h_decoded = decoder_h(encoded)
-        h_decoded = hidden2vocab(h_decoded)
-     
-        self.model = Model(input_layer, [h_decoded, h_decoded])
-        self.model.compile(optimizer=self.optimizer, loss=["binary_crossentropy", self.kl_loss])
-
-        self.encoder = Model(outputs=self.z_mean, inputs=input_layer)
-
-
-    def name(self):
-        n = "bowvae_%s" % self.PoolMode if self.comp_topk == None else "bowkate_%s" % self.PoolMode
-        n =  n + "_kl" if self.enableKL else n
-        return n
-    def sampling(self, args):
-        z_mean, z_log_var = args
-        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], self.dim[1]), mean=0.,\
-                                  stddev=self.epsilon_std)
-
-        return z_mean + K.exp(z_log_var / 2) * epsilon
-
-
-    def kl_loss(self, x, x_):
-        if self.comp_topk != None:
-            kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean_k) - K.exp(self.z_log_var), axis=-1)
-        else:
-            kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
-        return self.kl_weight * kl_loss
-
-
-
-class Seq2Seq(object):
-    
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_rate=0.01, keep_rate_word_dropout=0.5, mode=1, enableKL=True, enableS2S=True):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_rate=0.01, keep_rate_word_dropout=0.5, mode=1, enableKL=True, enableS2S=True, comp_topk=None, ctype=None, epsilon_std=1.0, separateEmbedding=False, enableNeg=False):
         self.dim = dim
         self.nb_words = nb_words
         self.max_len = max_len
@@ -409,6 +223,12 @@ class Seq2Seq(object):
         self.enableKL = enableKL
         self.enableS2S = enableS2S
         self.mode = mode
+        self.comp_topk = comp_topk
+        self.ctype = ctype
+        self.epsilon_std = epsilon_std
+        self.separateEmbedding = separateEmbedding
+        self.enableNeg = enableNeg
+
         self.build()
 
     def build(self):
@@ -422,16 +242,17 @@ class Seq2Seq(object):
                                         self.embedding_matrix.shape[-1],
                                         weights=[self.embedding_matrix],
                                         input_length=self.max_len,
+                                        name="enc_embedding",
                                         mask_zero=True,
                                         trainable=True)
 
-        encoder_lstm = GRU(hidden_dim, return_state=True)
+        encoder_lstm = GRU(hidden_dim, return_state=True, name="enc_gru")
 
         x = encoder_embedding(encoder_inputs)
         _, state = encoder_lstm(x)
 
         
-        mean = Dense(latent_dim, name="kl_mean")
+        mean = Dense(latent_dim)
         var = Dense(latent_dim)
 
         state_mean = mean(state)
@@ -443,19 +264,44 @@ class Seq2Seq(object):
                                       stddev=1)
             return z_mean + K.exp(z_log_var / 2) * epsilon 
 
-        state_z = Lambda(sampling, name="kl")([state_mean, state_var]) if self.enableKL else state_mean
+
+        # model with no kl loss
+        if self.enableS2S and not self.enableKL:
+            state_z = state_mean
+        else:
+            if self.comp_topk != None:
+                state_mean_k = KCompetitive(self.comp_topk, self.ctype)(state_mean)
+                state_z = Lambda(sampling, name="kl")([state_mean_k, state_var])
+            else:
+                state_z = Lambda(sampling, name="kl")([state_mean, state_var])
+
         
         decoder_inputs = Input(shape=(self.max_len,))
+        decoder_inputs2 = Input(shape=(self.max_len,))
+
         
         
         latent2hidden = Dense(hidden_dim)
-        decoder_lstm = GRU(hidden_dim, return_sequences=True)
+        decoder_lstm = GRU(hidden_dim, return_sequences=True, name="dec_gru")
         decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="dec_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
         
         
-        x = encoder_embedding(decoder_inputs)
+        x = encoder_embedding(decoder_inputs) if not self.separateEmbedding else decoder_embedding(decoder_inputs)
+        x2 = encoder_embedding(decoder_inputs2) if not self.separateEmbedding else decoder_embedding(decoder_inputs2)
+        
         decoder_outputs = decoder_lstm(x, initial_state=latent2hidden(state_z))
+        decoder_outputs2 = decoder_lstm(x2, initial_state=latent2hidden(state_z))
+
         rec_outputs = decoder_dense(decoder_outputs)
+        rec_outputs2 = decoder_dense(decoder_outputs2)
+
 
         
         if self.mode > 1:
@@ -469,9 +315,9 @@ class Seq2Seq(object):
             _, n_state = encoder_lstm(encoder_embedding(neg_inputs))
 
 
-            if self.mode == 8:
-                p_state = merge([state, p_state], mode="mul")
-                n_state = merge([state, n_state], mode="mul")
+            # if self.mode == 8:
+                # p_state = merge([state, p_state], mode="mul")
+                # n_state = merge([state, n_state], mode="mul")
 
 
             p_state_mean = mean(p_state)
@@ -496,6 +342,7 @@ class Seq2Seq(object):
                 query_sem = state
                 pos_doc_sem = p_state
                 neg_doc_sem = n_state
+            
 
             if self.mode < 8:
 
@@ -528,9 +375,10 @@ class Seq2Seq(object):
 
                 self.model = Model([encoder_inputs, pos_inputs, neg_inputs, decoder_inputs, pos_decoder_inputs, neg_decoder_inputs, kl_inputs], [rec_outputs, pos_rec_outputs, neg_rec_outputs, state_z, pairwise_pred])
                 if self.mode in [2,3]:
-                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss, 'categorical_crossentropy'], loss_weights=[0.05,0.05,0.05,0.05,2])
+                    self.model = Model([encoder_inputs, pos_inputs, neg_inputs, decoder_inputs, pos_decoder_inputs, neg_decoder_inputs, kl_inputs], [rec_outputs, pos_rec_outputs, neg_rec_outputs, state_z, pairwise_pred])
+                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss, 'categorical_crossentropy'], loss_weights=[1e-3,1e-3,-1e-3,1e-3,1])
                 elif self.mode in [4,5]:
-                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss, 'categorical_crossentropy'], loss_weights=[1,1,-1,1,1])
+                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss, 'categorical_crossentropy'], loss_weights=[1e-3,1e-3,-1e-3,1e-3,1])
                 elif self.mode in [7]:
                     self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss, 'categorical_crossentropy'], loss_weights=[0.05,0.05,-0.05,0.05,2])
                 elif self.mode in [6]:
@@ -552,8 +400,6 @@ class Seq2Seq(object):
                 self.encoder = Model(encoder_inputs, state)
         else:
 
-            
-
             if not self.enableS2S:
 
                 if self.enableKL:
@@ -562,16 +408,34 @@ class Seq2Seq(object):
                         kl_loss = - 0.5 * K.sum(1 + state_var - K.square(state_mean) - K.exp(state_var), axis=-1)
                         return kl_inputs * kl_loss
 
-                    self.model = Model([encoder_inputs, decoder_inputs, kl_inputs], [rec_outputs, state_z])
-                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', kl_annealing_loss])
+                    if self.enableNeg:
+
+                        def pos_rec_loss(y_true, y_pred):
+                            return K.sparse_categorical_crossentropy(y_true, y_pred)
+
+                        def neg_rec_loss(y_true, y_pred):
+                            return -1 * K.sparse_categorical_crossentropy(y_true, y_pred)
+
+
+                        self.model = Model([encoder_inputs, decoder_inputs, decoder_inputs2, kl_inputs], [rec_outputs, rec_outputs2, state_z])
+                        self.model.compile(optimizer=self.optimizer, loss=[pos_rec_loss, neg_rec_loss, kl_annealing_loss])
+                
+                    else:
+                        self.model = Model([encoder_inputs, decoder_inputs, kl_inputs], [rec_outputs, state_z])
+                        self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', kl_annealing_loss])
                 
                 else:
-                    def kl__loss(x, x_):
+                    def kl_loss(x, x_):
                         kl_loss = - 0.5 * K.sum(1 + state_var - K.square(state_mean) - K.exp(state_var), axis=-1)
                         return kl_loss
 
-                    self.model = Model([encoder_inputs, decoder_inputs], [rec_outputs, state_z])
-                    self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', kl__loss])        
+                    if self.enableNeg:
+                        self.model = Model([encoder_inputs, decoder_inputs, decoder_inputs2], [rec_outputs, rec_outputs2, state_z])
+                        self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', 'sparse_categorical_crossentropy', kl_loss], loss_weights=[1,-1,1])
+                    else:
+
+                        self.model = Model([encoder_inputs, decoder_inputs], [rec_outputs, state_z])
+                        self.model.compile(optimizer=self.optimizer, loss=['sparse_categorical_crossentropy', kl_loss])        
                 
 
             elif not self.enableKL and self.enableS2S:
@@ -581,12 +445,18 @@ class Seq2Seq(object):
             self.encoder = Model(encoder_inputs, state_mean)
 
     def name(self):
+
+        if self.enableNeg:
+            return "vae_neg" if not self.enableKL else "vae_neg_kl"
+
         if not self.enableKL and self.enableS2S:
-            return "seq2seq_ori"
+            if self.mode == 2:
+                return "seq2seq_ori_dssm"
+            return "seq2seq_ori" if not self.separateEmbedding else "seq2seq_ori2"
         elif not self.enableKL and not self.enableS2S:
-            return "vae"
+            return "vae" if self.comp_topk == None else "kate"
         elif self.enableKL and not self.enableS2S:
-            return "vae_kl"
+            return "vae_kl" if self.comp_topk == None else "kate_kl"
 
         if self.mode == 1:
             return "seq2seq_kl%.2f_wd%.2f" % (self.kl_rate, self.keep_rate_word_dropout)
@@ -594,7 +464,7 @@ class Seq2Seq(object):
             return "s2s_dssm_m%d_kl%.2f_wd%.2f" % (self.mode, self.kl_rate, self.keep_rate_word_dropout)
     
     def word_dropout(self, x, unk_token):
-
+        np.random.seed(0)
         x_ = np.copy(x)
         rows, cols = np.nonzero(x_)
         for r, c in zip(rows, cols):
@@ -606,10 +476,10 @@ class Seq2Seq(object):
 
 
 
-class SSVAE(object):
+class SSVAE():
     
 
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adadelta(lr=2.), kl_weight=0, FocusMode="fair", mode=1):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, comp_topk=None, ctype=None, epsilon_std=1.0, optimizer=Adam(lr=2.), kl_weight=0, FocusMode="fair", mode=1):
         self.dim = dim
         self.embedding_matrix = embedding_matrix
         self.comp_topk = comp_topk
@@ -742,8 +612,6 @@ class SSVAE(object):
 
 
 
-
-        # Set up the decoder, using `encoder_states` as initial state.
 
         # dec_query = Input(shape = (self.max_len,))
         dec_pos_doc = Input(shape = (self.max_len,))
@@ -933,3 +801,94 @@ class SSVAE2(object):
                                   stddev=self.epsilon_std)
 
         return z_mean + K.exp(z_log_var / 2) * epsilon
+
+
+class AE():
+    
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5):
+        self.dim = dim
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.embedding_matrix = embedding_matrix
+        self.optimizer = optimizer
+        self.keep_rate_word_dropout = keep_rate_word_dropout
+
+        self.build()
+
+    def build(self):
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        encoder_inputs = Input(shape=(self.max_len,))
+
+        encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="enc_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
+
+        fro_encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="fro_enc_embedding",
+                                        mask_zero=False,
+                                        trainable=False)
+
+        tmp = GlobalAveragePooling1D()(fro_encoder_embedding(encoder_inputs))
+
+        encoder_lstm = GRU(hidden_dim, return_state=True, name="enc_gru")
+
+        x = encoder_embedding(encoder_inputs)
+        _, state = encoder_lstm(x)
+
+        mean = Dense(latent_dim, activation="tanh")
+
+        state_mean = mean(state)
+
+        state_z = state_mean
+
+        dot_output = merge([tmp, state], mode="cos")
+        
+        # decoder_inputs = Input(shape=(self.max_len,))
+        
+        latent2hidden = Dense(hidden_dim, activation="tanh")
+        decoder_lstm = GRU(hidden_dim, return_sequences=True, name="dec_gru")
+        decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="dec_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
+        
+        
+        # x = encoder_embedding(decoder_inputs)
+        # decoder_outputs = decoder_lstm(x, initial_state=latent2hidden(state_z))
+        decoder_outputs = decoder_lstm(RepeatVector(self.max_len)(state_z))
+
+        rec_outputs = decoder_dense(decoder_outputs)
+
+        
+
+        # self.model = Model([encoder_inputs, decoder_inputs], rec_outputs)
+        self.model = Model([encoder_inputs], [rec_outputs, dot_output])
+        self.model.compile(optimizer=self.optimizer, loss=["sparse_categorical_crossentropy", "cosine_proximity"])
+        self.encoder = Model(encoder_inputs, state_mean)
+
+    def name(self):
+        return "ae"
+    
+    def word_dropout(self, x, unk_token):
+
+        x_ = np.copy(x)
+        rows, cols = np.nonzero(x_)
+        for r, c in zip(rows, cols):
+            if random.random() <= self.keep_rate_word_dropout:
+                continue
+            x_[r][c] = unk_token
+
+        return x_

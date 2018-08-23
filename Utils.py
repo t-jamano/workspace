@@ -105,8 +105,8 @@ def evaluate(run, test_set):
     may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
-        q_ = run.predict(q)
-        d_ = run.predict(d)
+        q_ = run.predict(q, batch_size=1024)
+        d_ = run.predict(d, batch_size=1024)
         cosine = CosineSim(q_.shape[-1])
 
         pred = cosine.model.predict([q_, d_]).flatten()
@@ -255,8 +255,8 @@ def parse_texts_bpe(texts, sp, bpe_dict, max_len=0, enablePadding=True, padding=
         tmp = []
 
         # with 30M_QD_lower2.txt we dont need these lines
-        # text = text.lower()
-        # text = re.sub(r'\W+', ' ', text)
+        text = text.lower()
+        text = re.sub(r'\W+', ' ', text)
         try:
             for t in sp.EncodeAsPieces(text):
                 if not isinstance(t, str):
@@ -372,22 +372,47 @@ def ttest(res1, res2, metric="ndcg"):
                 
 #             [model[] for i in texts]
 
+def generate_reconstruct_query(model, bpe, x, idx=None):
 
-def write_to_files(run, print_output, file_output, path, model_name, july_auc, best_auc_score, model):
-    print(print_output)
-    with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+    gen_x = np.argmax(model.predict(x), axis=-1) if idx == None else np.argmax(model.predict(x)[0], axis=-1)
+    bleu = []
+    results = []
+    count = 0
+    for i, k in zip(gen_x, x[0]):
+        gen_x = " ".join([bpe.index2word[t] for t in i])
+        real_x = " ".join([bpe.index2word[t] for t in k])
+
+        bleu.append(sentence_bleu(real_x, gen_x))
+        
+        real_x = real_x.replace("▁the", "")
+        real_x = real_x.replace("▁","")
+        gen_x = gen_x.replace("▁the", "")
+        gen_x = gen_x.replace("▁","")
+        gen_x = gen_x.replace("\t","")
+        gen_x = gen_x.replace("<eos>","")
+
+        print("%s\t%s" % (real_x, gen_x))
+        results.append("%s\t%s" % (real_x, gen_x))
+
+def output_to_file(model_name, file_output):
+    with open("/work/data/logs/%s.out" % (model_name), "a") as myfile:
         myfile.write(file_output)
 
-    if july_auc > best_auc_score:
-        best_auc_score = july_auc
+def write_to_files(run, print_output, file_output, path, model_name, model, save=False):
+    print(print_output)
+    if save:
+        with open("%sdata/out/%s" % (path,model_name), "a") as myfile:
+            myfile.write(file_output)
 
-        if model not in ["s2s_aae", "s2s_wae", "aae", "wae"]:
+        if model in ["bow_pr_aae", "bow_pr_wae", "pr_aae", "pr_wae"]:
+            
+            run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
+            run.vae.save('%sdata/models/%s.vae.h5' % (path,model_name), overwrite=True)
+        else:
 
             run.model.save('%sdata/models/%s.h5' % (path,model_name), overwrite=True)
             run.encoder.save('%sdata/models/%s.encoder.h5' % (path,model_name), overwrite=True)
-
-    return best_auc_score
-
+            
 
 class CustomModelCheckpoint(Callback):
     """Save the model after every epoch.

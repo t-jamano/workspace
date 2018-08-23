@@ -1,3 +1,5 @@
+import numpy as np
+np.random.seed(0)
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -8,7 +10,7 @@ K.set_session(session)
 
 from Utils import *
 from random import shuffle
-from keras.layers import Bidirectional, Dense, Merge, Embedding, BatchNormalization, GRU, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
+from keras.layers import Bidirectional, Dense, Embedding, BatchNormalization, GRU, GlobalMaxPooling1D, Concatenate, Flatten, Reshape, Input, Lambda, LSTM, merge, GlobalAveragePooling1D, RepeatVector, TimeDistributed, Layer, Activation, Dropout, Masking
 from keras.layers.advanced_activations import ELU
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam, SGD, RMSprop, Adadelta
@@ -24,15 +26,16 @@ from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.callbacks import LambdaCallback
 from keras_tqdm import TQDMNotebookCallback
 from keras_tqdm import TQDMCallback
+from keras.models import load_model
+from keras.callbacks import CSVLogger
 # from keras_adversarial.legacy import l1l2
 from keras_adversarial import AdversarialModel, fix_names
-from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling, AdversarialOptimizerAlternating
+from keras_adversarial import AdversarialOptimizerSimultaneous, normal_latent_sampling, AdversarialOptimizerAlternating, AdversarialOptimizerScheduled 
 from keras.layers import LeakyReLU, Activation, Concatenate, Dot, Add, Subtract, Multiply
 from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 from keras.preprocessing.text import Tokenizer
-import numpy as np
 from keras import initializers
 from gensim.models import KeyedVectors
 from gensim.models import KeyedVectors
@@ -291,7 +294,7 @@ class CosineSim():
 
 class S2S_AAE(object):
     
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5, mode=1, enableWasserstein=False, enableS2S=True):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5, mode=1, enableWasserstein=False, enableS2S=False, separateEmbedding=False, enablePairLoss=False, enablePR=False):
         self.dim = dim
         self.nb_words = nb_words
         self.max_len = max_len
@@ -301,51 +304,86 @@ class S2S_AAE(object):
         self.mode = mode
         self.enableWasserstein = enableWasserstein
         self.enableS2S = enableS2S
-
+        self.separateEmbedding = separateEmbedding
+        self.enablePairLoss = enablePairLoss
+        self.enablePR = enablePR
+        self.num_negatives = 1
         self.build()
 
     def build(self):
 
-        vae, enc, self.encoder = self.build_encoder()
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
 
-        dis = self.build_discriminator()
+        self.vae, self.enc, self.encoder = self.build_encoder()
+
+        self.dis = self.build_gs_discriminator()
+
+        self.pr_dis = self.build_pair_recon_discriminator()
+
 
         # assemple AAE
-        enc_inputs = enc.inputs[0]
-        z = enc(enc_inputs)
+        enc_inputs = self.enc.inputs[0]
+        z = self.enc(enc_inputs)
 
-        xpred = vae(vae.inputs)
         zreal = normal_latent_sampling((self.dim[1],))(enc_inputs)
-        yreal = dis(zreal)
-        yfake = dis(z)
-        
-        self.model = Model(vae.inputs, fix_names([xpred, yfake, yreal], ["xpred", "yfake", "yreal"]))
+        yreal = self.dis(zreal)
+        yfake = self.dis(z)
+
+        if self.enablePairLoss:
+            q_pred, pd_pred, nd_pred, pair = self.vae(self.vae.inputs)
+            aae = Model(self.vae.inputs, fix_names([q_pred, pd_pred, nd_pred, pair, yfake, yreal], ["q_pred", "pd_pred", "nd_pred", "pair", "yfake", "yreal"]))
+        else:
+            xpred = self.vae(self.vae.inputs)
+            aae = Model(self.vae.inputs, fix_names([xpred, yfake, yreal], ["xpred", "yfake", "yreal"]))
 
         # build adversarial model
-        generative_params = vae.trainable_weights
+        generative_params = self.vae.trainable_weights
 
-        self.model = AdversarialModel(base_model=self.model,
-                                 player_params=[generative_params, dis.trainable_weights],
+        self.model = AdversarialModel(base_model=aae,
+                                 player_params=[generative_params, self.dis.trainable_weights],
                                  player_names=["generator", "discriminator"])
 
         if self.mode == 1:
             adversarial_optimizer = AdversarialOptimizerSimultaneous()
         elif self.mode == 2:
             adversarial_optimizer = AdversarialOptimizerAlternating()
+        elif self.mode == 3:
+            adversarial_optimizer = AdversarialOptimizerScheduled([0]+ ([1] * 10))
 
 
-        rec_loss = "sparse_categorical_crossentropy" if not self.enableWasserstein else self.wasserstein_loss
+        dis_loss = "binary_crossentropy" if not self.enableWasserstein else self.wasserstein_loss
+        gen_loss = "sparse_categorical_crossentropy"
 
+        if self.enablePairLoss:
+            nd_weight = 1e-2 if not self.enableS2S else -1e-2
+            self.model.adversarial_compile(adversarial_optimizer=adversarial_optimizer,
+                                  player_optimizers=[self.optimizer, self.optimizer],
+                                  loss={"yfake": dis_loss, "yreal": dis_loss,
+                                        "q_pred": gen_loss,
+                                        "pd_pred": gen_loss,
+                                        "nd_pred": gen_loss,
+                                        "pair": "categorical_crossentropy"},
+                                  player_compile_kwargs=[{"loss_weights": {"yfake": 1e-3, "yreal": 1e-3, "q_pred": 1e-2, "pd_pred": 1e-2, "nd_pred": nd_weight, "pair": 2}}] * 2)
 
-        self.model.adversarial_compile(adversarial_optimizer=adversarial_optimizer,
-                                  player_optimizers=[Adam(1e-4, decay=1e-4), Adam(1e-3, decay=1e-4)],
-                                  loss={"yfake": "binary_crossentropy", "yreal": "binary_crossentropy",
-                                        "xpred": rec_loss},
-                                  player_compile_kwargs=[{"loss_weights": {"yfake": 1e-2, "yreal": 1e-2, "xpred": 1}}] * 2)
+        else:
+            self.model.adversarial_compile(adversarial_optimizer=adversarial_optimizer,
+                                      player_optimizers=[self.optimizer, self.optimizer],
+                                      loss={"yfake": dis_loss, "yreal": dis_loss,
+                                            "xpred": gen_loss},
+                                      player_compile_kwargs=[{"loss_weights": {"yfake": 1e-2, "yreal": 1e-2, "xpred": 1}}] * 2)
 
 
     def wasserstein_loss(self, y_true, y_pred):
         return K.mean(y_true * y_pred)
+
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                  stddev=1)
+        return z_mean + K.exp(z_log_var / 2) * epsilon 
 
     def build_encoder(self):
 
@@ -357,68 +395,146 @@ class S2S_AAE(object):
                                         self.embedding_matrix.shape[-1],
                                         weights=[self.embedding_matrix],
                                         input_length=self.max_len,
+                                        name="enc_embedding",
                                         mask_zero=True,
                                         trainable=True)
 
-        encoder_lstm = GRU(hidden_dim, return_state=True)
+        self.encoder_lstm = GRU(hidden_dim, return_state=True, name="enc_gru")
 
         x = self.encoder_embedding(encoder_inputs)
-        _, state = encoder_lstm(x)
+        _, self.state = self.encoder_lstm(x)
 
-        mean = Dense(latent_dim)
-        var = Dense(latent_dim)
+        self.mean = Dense(latent_dim)
+        self.var = Dense(latent_dim)
 
-        state_mean = mean(state)
-        state_var = var(state)
+        state_mean = self.mean(self.state)
+        state_var = self.var(self.state)
 
-        def sampling(args):
-            z_mean, z_log_var = args
-            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
-                                      stddev=1)
-            return z_mean + K.exp(z_log_var / 2) * epsilon 
+        
 
-        # state_z = Lambda(sampling, name="kl")([state_mean, state_var])
-        state_z = merge([state_mean, state_var], mode=lambda p: p[0] + K.random_normal(K.shape(p[0])) * K.exp(p[1] / 2),
-              output_shape=lambda p: p[0])
+        state_z = Lambda(self.sampling, name="kl")([state_mean, state_var])
 
-        # return Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
-
-    # def build_decoder(self):
-
-        # hidden_dim = self.dim[0]
-        # latent_dim = self.dim[1]
 
         decoder_inputs = Input(shape=(self.max_len,), name="dec_input")
         # state_inputs = Input(shape=(latent_dim,), name="dec_state_input")
 
-        latent2hidden = Dense(hidden_dim)
-        decoder_lstm = GRU(hidden_dim, return_sequences=True)
-        decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        self.latent2hidden = Dense(hidden_dim)
+        self.decoder_lstm = GRU(hidden_dim, return_sequences=True)
+        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        self.decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="dec_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
         
-        x = self.encoder_embedding(decoder_inputs)
-        decoder_outputs = decoder_lstm(x, initial_state=latent2hidden(state_z))
-        rec_outputs = decoder_dense(decoder_outputs)
+        x = self.encoder_embedding(decoder_inputs) if not self.separateEmbedding else self.decoder_embedding(decoder_inputs)
+        decoder_outputs = self.decoder_lstm(x, initial_state=self.latent2hidden(state_z))
+        rec_outputs = self.decoder_dense(decoder_outputs)
 
-        return Model([encoder_inputs, decoder_inputs], rec_outputs), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+        if self.enablePairLoss:
+            pos_inputs, neg_inputs, pos_decoder_inputs, neg_decoder_inputs, pos_rec_outputs, neg_rec_outputs, pairwise_pred = self.build_pairwise()
+            return Model([encoder_inputs, pos_inputs, neg_inputs, decoder_inputs, pos_decoder_inputs, neg_decoder_inputs], [rec_outputs, pos_rec_outputs, neg_rec_outputs, pairwise_pred]), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+        else:
+            return Model([encoder_inputs, decoder_inputs], rec_outputs), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
 
-    def build_discriminator(self):
+    def build_pair_recon_discriminator(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        latent_inputs = Input(shape=(latent_dim,), name="latent_dis_latent_input")
+
+        h = Dense(hidden_dim)(latent_inputs)
+        h = LeakyReLU(0.2)(h)
+        h = Dense(latent_dim)(h)
+        h = LeakyReLU(0.2)(h)
+
+        return Model(latent_inputs, h)
+
+    def build_gs_discriminator(self):
 
         hidden_dim = self.dim[0]
         latent_dim = self.dim[1]
 
         latent_inputs = Input(shape=(latent_dim,), name="dis_latent_input")
 
-        latent2hidden = Dense(hidden_dim)
-        pred = Dense(1, activation='sigmoid', name="dis")(latent2hidden(latent_inputs))
+        h = Dense(hidden_dim)(latent_inputs)
+        h = LeakyReLU(0.2)(h)
+        h = Dense(hidden_dim)(h)
+        h = LeakyReLU(0.2)(h)
+
+        pred = Dense(1, activation='sigmoid' if not self.enableWasserstein else 'linear', name="dis")(h)
 
         return Model(latent_inputs, pred)
+
+    def build_pairwise(self):
+
+        pos_inputs = Input(shape=(self.max_len,))
+        neg_inputs = Input(shape=(self.max_len,))
+        pos_decoder_inputs = Input(shape=(self.max_len,))
+        neg_decoder_inputs = Input(shape=(self.max_len,))
+
+        _, p_state = self.encoder_lstm(self.encoder_embedding(pos_inputs))
+        _, n_state = self.encoder_lstm(self.encoder_embedding(neg_inputs))
+
+        p_state_mean = self.mean(p_state)
+        p_state_var = self.var(p_state)
+
+        n_state_mean = self.mean(n_state)
+        n_state_var = self.var(n_state)
+
+        p_state_z = Lambda(self.sampling, name="pos_kl")([p_state_mean, p_state_var])
+        n_state_z = Lambda(self.sampling, name="neg_kl")([n_state_mean, n_state_var])
+
+
+        query_sem = self.state
+        pos_doc_sem = p_state
+        neg_doc_sem = n_state
+
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = dot([query_sem, neg_doc_sem], axes = 1, normalize = True) # See equation (4).
+        concat_Rs = concatenate([R_Q_D_p, R_Q_D_ns])
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+        weight = np.array([1]).reshape(1, 1, 1)
+        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+        pairwise_pred = Activation("softmax", name="pair")(with_gamma) # See equation (5).
+
+        pos_rec_outputs = self.decoder_dense(self.decoder_lstm(self.encoder_embedding(pos_decoder_inputs), initial_state=self.latent2hidden(p_state_z)))
+        neg_rec_outputs = self.decoder_dense(self.decoder_lstm(self.encoder_embedding(neg_decoder_inputs), initial_state=self.latent2hidden(n_state_z)))
+
+        return pos_inputs, neg_inputs, pos_decoder_inputs, neg_decoder_inputs, pos_rec_outputs, neg_rec_outputs, pairwise_pred
+
+    def build_pairwise_model(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        query_sem = Input(shape=(latent_dim,))
+        pos_doc_sem = Input(shape=(latent_dim,))
+        neg_doc_sem = Input(shape=(latent_dim,))
+
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = dot([query_sem, neg_doc_sem], axes = 1, normalize = True) # See equation (4).
+        concat_Rs = concatenate([R_Q_D_p, R_Q_D_ns])
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+        weight = np.array([1]).reshape(1, 1, 1)
+        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+        pairwise_pred = Activation("softmax", name="pair")(with_gamma) # See equation (5).
+
+        return Model([query_sem, pos_doc_sem, neg_doc_sem], pairwise_pred)
 
     def name(self):
 
         model_name = "s2s_" if self.enableS2S else ""
-        loss_name = "aae_" if not self.enableWasserstein else "wae_"
+        pair_name = "dssm_" if self.enablePairLoss else ""
+        loss_name = "aae" if not self.enableWasserstein else "wae"
+        loss_name = loss_name + "_" if not self.separateEmbedding else loss_name + "2_"
 
-        return "%s%sm%d_wd%.2f" % (model_name, loss_name, self.mode, self.keep_rate_word_dropout)
+        return "%s%s%sm%d_wd%.2f" % (pair_name, loss_name, model_name, self.mode, self.keep_rate_word_dropout)
     
     def word_dropout(self, x, unk_token):
 
@@ -443,6 +559,7 @@ class BinaryClassifier():
         self.enableLSTM = enableLSTM
         self.PoolMode = PoolMode
 
+
         query = Input(shape = (self.max_len,))
         doc = Input(shape = (self.max_len,))
 
@@ -460,28 +577,32 @@ class BinaryClassifier():
                     mask_zero=True if self.enableLSTM else False,
                     trainable=True)
         
-        q_bilstm = LSTM(hidden_dim, return_sequences=False)
-        d_bilstm = LSTM(hidden_dim, return_sequences=False)
+        q_bilstm = GRU(hidden_dim, return_sequences=False)
+        d_bilstm = GRU(hidden_dim, return_sequences=False)
 
         Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
 
+        norm = BatchNormalization()
         if self.enableLSTM:
             query_sem = q_bilstm(q_embed_layer(query))
-            doc_sem = d_bilstm(d_embed_layer(doc)) 
+            doc_sem = d_bilstm(d_embed_layer(doc))
         else:
             query_sem = Pooling(q_embed_layer(query))
             doc_sem = Pooling(d_embed_layer(doc)) 
 
-        def exponent_neg_manhattan_distance(left, right):
-            ''' Helper function for the similarity estimate of the LSTMs outputs'''
-            return K.exp(-K.sum(K.abs(left-right), axis=1, keepdims=True))
+
+        # def exponent_neg_manhattan_distance(left, right):
+        #     ''' Helper function for the similarity estimate of the LSTMs outputs'''
+        #     return K.exp(-K.sum(K.abs(left-right), axis=1, keepdims=True))
 
 
-        malstm_distance = Merge(mode=lambda x: exponent_neg_manhattan_distance(x[0], x[1]), output_shape=lambda x: (x[0][0], 1))([query_sem, doc_sem])
+        # cos = merge([query_sem, doc_sem], mode=lambda x: exponent_neg_manhattan_distance(x[0], x[1]), output_shape=lambda x: (x[0][0], 1))
+
+
 
 # #       concat > mul > cos
 #         # old
-#         cos = merge([query_sem, doc_sem], mode="concat")
+        cos = merge([query_sem, doc_sem], mode="cos")
 #         cos = BatchNormalization()(cos)
 #         cos = Dropout(0.2)(cos)
 #         # concat = Concatenate()([query_sem, doc_sem])
@@ -490,21 +611,294 @@ class BinaryClassifier():
 #         # merge_all = merge([concat, sub, mul], mode="concat")
 
 
-#         pred = Dense(1, activation="sigmoid")(cos)
+        pred = Dense(1, activation="sigmoid")(cos)
 
-        self.model = Model(inputs = [query, doc] , outputs = malstm_distance)
-        # self.model.compile(optimizer = optimizer, loss = "binary_crossentropy", metrics=["accuracy"])
-        self.model.compile(optimizer = optimizer, loss = "mean_squared_error", metrics=["accuracy"])
-        
-
+        self.model = Model([query, doc] , pred)
+        self.model.compile(optimizer = optimizer, loss = "binary_crossentropy", metrics=["accuracy"])
+        # self.model.compile(optimizer = optimizer, loss = "mean_squared_error", metrics=["accuracy"])
+        # cosine_proximity
         self.encoder = Model(inputs=query, outputs=query_sem)
 
     def name(self):
-        return "binary_lstm" if self.enableLSTM else "binary_%s" % self.PoolMode
+        return "binary_gru" if self.enableLSTM else "binary_%s" % self.PoolMode
+
+
+class AdversarialPairwiseModel(object):
+    
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5, mode=1, enableWasserstein=False, enableS2S=False):
+        self.dim = dim
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.embedding_matrix = embedding_matrix
+        self.optimizer = optimizer
+        self.keep_rate_word_dropout = keep_rate_word_dropout
+        self.mode = mode
+        self.enableWasserstein = enableWasserstein
+        self.enableS2S = enableS2S
+        self.num_negatives = 1
+        self.build()
+
+    def build(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        self.ae, self.encoder, self.ae_encoder, self.ae_decoder, self.dssm = self.build_autoencoder()
+
+        self.gs_dis = self.build_gs_discriminator()
+        self.pr_dis = self.build_pr_discriminator()
+
+        # inputs = [Input((self.max_len,), name="pr_input%d" % i) for i in range(3)]
+        inputs = [self.ae.inputs[i] for i in range(3)]
+
+        decoder_inputs = [self.ae.inputs[i+3] for i in range(3)]
+
+
+        latents = [self.encoder(i) for i in inputs]
+
+        zreal = [normal_latent_sampling((latent_dim,))(i) for i in inputs]
+        yreal = [self.gs_dis(i) for i in zreal]
+        yfake = [self.gs_dis(self.ae_encoder(i)) for i in latents]
+
+
+        dis_latents = [self.pr_dis(i) for i in latents]
+
+        pr_y_real = self.dssm(dis_latents)
+        pr_y_fake = [self.ae_decoder([i, j]) for i, j in zip(decoder_inputs, dis_latents)]
+
+
+
+        # xpred = [self.ae([i, j]) for i, j in zip(latents, decoder_inputs)]
+        xpred = self.ae(self.ae.inputs)
+
+
+
+        combine_outputs = xpred + yfake + yreal  + pr_y_fake + [pr_y_real]
+        combine_inputs = self.ae.inputs
+
+        outputs_name = ["q_pred", "pd_pred", "nd_pred", "pair", "q_yfake", "pd_yfake", "nd_yfake", "q_yreal", "pd_yreal", "nd_yreal", "pr_q_fake", "pr_pd_fake", "pr_nd_fake", "pr_y_real"]
+
+        combine_models = Model(combine_inputs, fix_names(combine_outputs, outputs_name))
+
+        # build adversarial model
+        generative_params = self.ae.trainable_weights + self.encoder.trainable_weights + self.dssm.trainable_weights
+
+        gs_discriminative_params = self.gs_dis.trainable_weights
+        pr_discriminative_params = self.pr_dis.trainable_weights
+
+        self.model = AdversarialModel(base_model=combine_models,
+                                 player_params=[generative_params, gs_discriminative_params + pr_discriminative_params],
+                                 player_names=["generator", "discriminator"])
+
+
+
+
+        if self.mode == 1:
+            adversarial_optimizer = AdversarialOptimizerSimultaneous()
+        elif self.mode == 2:
+            adversarial_optimizer = AdversarialOptimizerAlternating()
+        elif self.mode == 3:
+            adversarial_optimizer = AdversarialOptimizerScheduled([1,1,1,1,1,0])
+
+
+        dis_loss = "binary_crossentropy" if not self.enableWasserstein else self.wasserstein_loss
+
+        gen_weights = [{"loss_weights": {"pr_q_fake": 1e-3, "pr_pd_fake": 1e-3, "pr_nd_fake": 1e-3, "pr_y_real": -1e-3, "q_yfake": 1e-3, "pd_yfake": 1e-3, "nd_yfake": 1e-3, "q_yreal": -1e-3, "pd_yreal": -1e-3, "nd_yreal": -1e-3, "q_pred": 1e-1, "pd_pred": 1e-1, "nd_pred": 1e-1, "pair": 1}}]
+        dis_weights = [{"loss_weights": {"pr_q_fake": -1e-3, "pr_pd_fake": -1e-3, "pr_nd_fake": -1e-3, "pr_y_real": 1e-3, "q_yfake": -1e-3, "pd_yfake": -1e-3, "nd_yfake": -1e-3, "q_yreal": 1e-3, "pd_yreal": 1e-3, "nd_yreal": 1e-3, "q_pred": 1e-1, "pd_pred": 1e-1, "nd_pred": 1e-1, "pair": 1}}]
+
+        self.model.adversarial_compile(adversarial_optimizer=adversarial_optimizer,
+                              player_optimizers=[self.optimizer, self.optimizer],
+                              loss={"q_yfake": dis_loss, "q_yreal": dis_loss,
+                                    "pd_yfake": dis_loss, "pd_yreal": dis_loss,
+                                    "nd_yfake": dis_loss, "nd_yreal": dis_loss,
+                                    "q_pred": "sparse_categorical_crossentropy",
+                                    "pd_pred": "sparse_categorical_crossentropy",
+                                    "nd_pred": "sparse_categorical_crossentropy",
+                                    "pr_q_fake": "sparse_categorical_crossentropy",
+                                    "pr_pd_fake": "sparse_categorical_crossentropy",
+                                    "pr_nd_fake": "sparse_categorical_crossentropy",
+                                    "pair": "categorical_crossentropy",
+                                    "pr_y_real": "categorical_crossentropy"},
+                              player_compile_kwargs=gen_weights+dis_weights)
+
+
+    def wasserstein_loss(self, y_true, y_pred):
+        return K.mean(y_true * y_pred)
+
+
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                  stddev=1)
+        return z_mean + K.exp(z_log_var / 2) * epsilon 
+
+    def build_autoencoder(self):
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        q_inputs = Input(shape=(self.max_len,), name="main_encoder_input1")
+        pd_inputs = Input(shape=(self.max_len,), name="main_encoder_input2")
+        nd_inputs = Input(shape=(self.max_len,), name="main_encoder_input3")
+
+
+
+        self.encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="enc_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
+
+        self.encoder_lstm = GRU(hidden_dim, return_state=True, name="enc_gru")
+        self.hidden2latent = Dense(latent_dim)
+
+
+        self.q_state = self.hidden2latent(self.encoder_lstm(self.encoder_embedding(q_inputs))[-1])
+        self.pd_state = self.hidden2latent(self.encoder_lstm(self.encoder_embedding(pd_inputs))[-1])
+        self.nd_state = self.hidden2latent(self.encoder_lstm(self.encoder_embedding(nd_inputs))[-1])
+
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+
+        self.mean = Dense(latent_dim)
+        self.var = Dense(latent_dim)
+
+        q_state_z = Lambda(self.sampling, name="q_kl")([self.mean(self.q_state), self.var(self.q_state)])
+        pd_state_z = Lambda(self.sampling, name="pd_kl")([self.mean(self.pd_state), self.var(self.pd_state)])
+        nd_state_z = Lambda(self.sampling, name="nd_kl")([self.mean(self.nd_state), self.var(self.nd_state)])
+
+
+
+        q_decoder_inputs = Input(shape=(self.max_len,), name="q_dec_input")
+        pd_decoder_inputs = Input(shape=(self.max_len,), name="pd_dec_input")
+        nd_decoder_inputs = Input(shape=(self.max_len,), name="nd_dec_input")
+
+        # q_decoder_inputs = Input(shape=(self.max_len,), name="q_dec_input")
+        # pd_decoder_inputs = Input(shape=(self.max_len,), name="pd_dec_input")
+        # nd_decoder_inputs = Input(shape=(self.max_len,), name="nd_dec_input")
+
+
+        self.latent2hidden = Dense(hidden_dim)
+        self.decoder_lstm = GRU(hidden_dim, return_sequences=True)
+        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        self.decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="dec_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
+        
+        q_rec_outputs = self.decoder_dense(self.decoder_lstm(self.decoder_embedding(q_decoder_inputs), initial_state=self.latent2hidden(q_state_z)))
+        pd_rec_outputs = self.decoder_dense(self.decoder_lstm(self.decoder_embedding(pd_decoder_inputs), initial_state=self.latent2hidden(pd_state_z)))
+        nd_rec_outputs = self.decoder_dense(self.decoder_lstm(self.decoder_embedding(nd_decoder_inputs), initial_state=self.latent2hidden(nd_state_z)))
+
+
+
+        query_sem = self.q_state
+        pos_doc_sem = self.pd_state
+        neg_doc_sem = self.nd_state
+
+
+        weight = np.array([1]).reshape(1, 1, 1)
+        conv = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])
+        pairwise_pred = self.pairwise_function(query_sem, pos_doc_sem, neg_doc_sem, conv)
+
+        
+        ae_encoder_input = Input((latent_dim, ), name="ae_encoder_input")
+        ae_encoder_output = Lambda(self.sampling, name="kl")([self.mean(ae_encoder_input), self.var(ae_encoder_input)])
+        
+        ae_encoder = Model(ae_encoder_input, ae_encoder_output)
+
+
+        ae_decoder_latent_input = Input((latent_dim, ), name="ae_decoder_latent_input")
+        ae_decoder_input = Input((self.max_len, ), name="ae_decoder_input")
+        infer_rec_outputs = self.decoder_dense(self.decoder_lstm(self.decoder_embedding(ae_decoder_input), initial_state=self.latent2hidden(ae_decoder_latent_input)))
+
+        ae_decoder = Model([ae_decoder_input, ae_decoder_latent_input], infer_rec_outputs)
+
+
+        query_dssm_input = Input(shape=(latent_dim,), name="q_pair_input")
+        pos_doc_dssm_input = Input(shape=(latent_dim,), name="pos_pair_input")
+        neg_doc_dssm_input = Input(shape=(latent_dim,), name="neg_pair_input")
+        infer_pairwise_pred = self.pairwise_function(query_dssm_input, pos_doc_dssm_input, neg_doc_dssm_input, conv)
+
+        dssm = Model([query_dssm_input, pos_doc_dssm_input, neg_doc_dssm_input], infer_pairwise_pred)
+
+        vae_dssm = Model([q_inputs, pd_inputs, nd_inputs, q_decoder_inputs, pd_decoder_inputs, nd_decoder_inputs], [q_rec_outputs, pd_rec_outputs, nd_rec_outputs, pairwise_pred])
+        encoder = Model(q_inputs, self.q_state)
+
+        return vae_dssm, encoder, ae_encoder, ae_decoder, dssm
+
+
+    def build_pr_discriminator(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        latent_inputs = Input(shape=(latent_dim,), name="pr_dis_input")
+
+        h = Dense(hidden_dim)(latent_inputs)
+        h = LeakyReLU(0.2)(h)
+        h = Dense(latent_dim)(h)
+        h = LeakyReLU(0.2)(h)
+
+        return Model(latent_inputs, h)
+
+    def build_gs_discriminator(self):
+
+        hidden_dim = self.dim[0]
+        latent_dim = self.dim[1]
+
+        latent_inputs = Input(shape=(latent_dim,), name="gs_dis_input")
+
+        h = Dense(hidden_dim)(latent_inputs)
+        h = LeakyReLU(0.2)(h)
+        h = Dense(hidden_dim)(h)
+        h = LeakyReLU(0.2)(h)
+
+        pred = Dense(1, activation='sigmoid' if not self.enableWasserstein else 'linear', name="dis")(h)
+
+        return Model(latent_inputs, pred)
+
+
+    def pairwise_function(self, query_sem, pos_doc_sem, neg_doc_sem, conv):
+
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = dot([query_sem, neg_doc_sem], axes = 1, normalize = True) # See equation (4).
+        concat_Rs = concatenate([R_Q_D_p, R_Q_D_ns])
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+        with_gamma = conv(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+        pairwise_pred = Activation("softmax", name="pair")(with_gamma) # See equation (5).
+
+        return pairwise_pred
+
+    def name(self):
+
+        model_name = "s2s_" if self.enableS2S else ""
+        loss_name = "aae" if not self.enableWasserstein else "wae"
+        loss_name = "pr_"+loss_name
+
+        return "%s%sm%d_wd%.2f" % (model_name, loss_name, self.mode, self.keep_rate_word_dropout)
+    
+    def word_dropout(self, x, unk_token):
+
+        x_ = np.copy(x)
+        rows, cols = np.nonzero(x_)
+        for r, c in zip(rows, cols):
+            if random.random() <= self.keep_rate_word_dropout:
+                continue
+            x_[r][c] = unk_token
+
+        return x_
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max"):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max", enableHybrid=False):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -514,6 +908,7 @@ class DSSM():
         self.enableSeparate = enableSeparate
         self.enableLSTM = enableLSTM
         self.PoolMode = PoolMode
+        self.enableHybrid = enableHybrid
 
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
@@ -525,26 +920,42 @@ class DSSM():
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
-                    name="q_embeding_layer",
+                    name="q_embedding_layer",
                     mask_zero=True if self.enableLSTM else False,
                     trainable=True)
+
+
         
-        bilstm = GRU(hidden_dim, name='q_gru', return_sequences=False)
+        bilstm = Bidirectional(GRU(hidden_dim, name='q_gru', return_sequences=False, trainable=True))
 
         if enableSeparate:
             d_embed_layer = Embedding(nb_words,
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
-                    name="d_embed_layer",
+                    name="d_embedding_layer",
                     mask_zero=True if self.enableLSTM else False,
                     trainable=True)
-            d_bilstm = GRU(hidden_dim, name="d_gru")
+            d_bilstm = Bidirectional(GRU(hidden_dim, name="d_gru"))
+
+        if self.enableHybrid:
+            bpe_embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    mask_zero=True if self.enableLSTM else False,
+                    trainable=True)
+            bpe_bilstm = GRU(hidden_dim)
 
         Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
 
         if self.enableLSTM:
-            query_sem = bilstm(embed_layer(query))
+            if enableHybrid:
+                # query_sem = merge([bilstm(embed_layer(query)), bpe_bilstm(bpe_embed_layer(query))], mode="concat")
+                # query_sem = Dense(hidden_dim)(query_sem)
+                query_sem = bilstm(merge([embed_layer(query), bpe_embed_layer(query)]))
+            else:
+                query_sem = bilstm(embed_layer(query))
             pos_doc_sem = bilstm(embed_layer(pos_doc)) if not enableSeparate else d_bilstm(d_embed_layer(pos_doc))
             neg_doc_sems = [bilstm(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [d_bilstm(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
         else:
@@ -594,65 +1005,236 @@ class DSSM():
         else:
             return "dssm2_%s" % self.PoolMode if self.enableSeparate else "dssm_%s" % self.PoolMode
 
-class VRAE(object):
+
+class AAE():
     
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_weight=1, enableKL=False):
-        act = ELU()
-        self.kl_weight = kl_weight
-        self.enableKL = enableKL
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), mode=1, keep_rate_word_dropout=0.5, enableWasserstein=False, enableBOW=False, enableS2S=False, enablePairLoss=False):
+        self.dim = dim
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.embedding_matrix = embedding_matrix
+        self.optimizer = optimizer
+        self.enableWasserstein = enableWasserstein
+        self.enableS2S = enableS2S
+        self.enableBOW = enableBOW
+        self.mode = mode
+        self.enablePairLoss = enablePairLoss
+        self.keep_rate_word_dropout = keep_rate_word_dropout
+        self.hidden_dim = self.dim[0]
+        self.latent_dim = self.dim[1]
+        self.num_negatives = 1
+
+        self.dis_loss = "binary_crossentropy" if not self.enableWasserstein else self.wasserstein_loss
+
+        self.build()
 
 
-        x = Input(batch_shape=(None, max_len))
-
-        embedding_layer = Embedding(nb_words, embedding_matrix[0].shape[-1], weights=[embedding_matrix],
-                                    input_length=max_len, trainable=True, mask_zero=True)
-        bilstm = LSTM(dim[0], return_sequences=False, recurrent_dropout=0.2)
-        hidden_layer = Dense(dim[0], activation='linear')
-        mean_layer = Dense(dim[1])
-        var_layer = Dense(dim[1])
+    def build(self):
 
 
-        h = embedding_layer(x)
-        h = bilstm(h)
-        # h = Dropout(0.2)(h)
-        h = hidden_layer(h)
-        h = act(h)
-        # h = Dropout(0.2)(h)
-        self.z_mean = mean_layer(h)
-        self.z_log_var = var_layer(h)
+        self.ae, self.gs_encoder, self.encoder = self.build_ae()
+        self.discriminator = self.build_gs_discriminator()
+        self.discriminator.compile(optimizer=Adam(), loss=self.dis_loss, metrics=['accuracy'])
+        self.discriminator.trainable = False
 
-        def sampling(args):
-            z_mean, z_log_var = args
-            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[-1]), mean=0.,
-                                      stddev=1)
-            return z_mean + K.exp(z_log_var / 2) * epsilon
+        inputs = self.ae.inputs
+        rec_pred = self.ae(inputs)
+        aae_penalty = self.discriminator(self.gs_encoder(inputs[0]))
 
-        z = Lambda(sampling, output_shape=(dim[1],))([self.z_mean, self.z_log_var])
+        if self.enablePairLoss:
+            self.doc_ae, self.doc_gs_encoder, self.doc_encoder = self.build_ae2()
+            self.doc_discriminator = self.build_gs_discriminator()
+            self.doc_discriminator.compile(optimizer=Adam(), loss=self.dis_loss, metrics=['accuracy'])
+            self.doc_discriminator.trainable = False
 
-        # we instantiate these layers separately so as to reuse them later
-        repeated_context = RepeatVector(max_len)
-        decoder_h = LSTM(dim[0], return_sequences=True, recurrent_dropout=0.2)
-        softmax_layer = Dense(nb_words, activation='softmax')
-        decoder_mean = TimeDistributed(softmax_layer, name="rec")
-        decoder_kl = TimeDistributed(softmax_layer, name="kl")
+            self.dssm = self.build_pairwise_model()
 
-        h_decoded = decoder_h(repeated_context(z))
-        x_decoded_mean = decoder_mean(h_decoded)        
-        x_decoded_kl = decoder_kl(h_decoded)
+            pd_inputs, nd_inputs, dec_pd_inputs, dec_nd_inputs = self.doc_ae.inputs
 
+            pd_rec_pred, nd_rec_pred = self.doc_ae([pd_inputs, nd_inputs, dec_pd_inputs, dec_nd_inputs])
+
+            if self.mode == 1:
+                triplet_latents = [self.encoder(inputs[0]), self.doc_encoder(pd_inputs), self.doc_encoder(nd_inputs)]
+            elif self.mode == 2:
+                triplet_latents = [self.gs_encoder(inputs[0]), self.doc_gs_encoder(pd_inputs), self.doc_gs_encoder(nd_inputs)]
+
+            pair_pred = self.dssm(triplet_latents)
+
+
+            pd_aae_penalty = self.discriminator(self.doc_gs_encoder(pd_inputs))
+            nd_aae_penalty = self.discriminator(self.doc_gs_encoder(nd_inputs))
+
+
+            combine_inputs = [inputs[0], pd_inputs, nd_inputs, inputs[1], dec_pd_inputs, dec_nd_inputs]
+
+            self.model = Model(combine_inputs, [rec_pred, pd_rec_pred, nd_rec_pred, pair_pred, aae_penalty, pd_aae_penalty, nd_aae_penalty])
+            # self.model.compile(optimizer=Adam(), loss=["sparse_categorical_crossentropy"] * 3 + ["categorical_crossentropy"] + ["binary_crossentropy"] * 3 , loss_weights=[1e-3, 1e-3, 1e-3, 1, 1e-4, 1e-4, 1e-4])
+            self.model.compile(optimizer=Adam(), loss=["sparse_categorical_crossentropy"] * 3 + ["categorical_crossentropy"] + [self.dis_loss] * 3 , loss_weights=[1e-4, 1e-4, 1e-4, 1, 1e-4, 1e-4, 1e-4])
+
+        else:
+            
+            self.model = Model(inputs, [rec_pred, aae_penalty])
+            self.model.compile(optimizer=Adam(), loss=["sparse_categorical_crossentropy", self.dis_loss], loss_weights=[0.9999, 0.0001])
         
-        self.encoder = Model(x, self.z_mean) 
-        self.model = Model(x, [x_decoded_mean, x_decoded_kl])
-        # if mode in [3,4]:
-            # self.model.compile(optimizer=optimizer, loss=["categorical_crossentropy", self.kl_loss])
-        # else:
-        self.model.compile(optimizer=optimizer, loss=["sparse_categorical_crossentropy", self.kl_loss])
+        
+    def wasserstein_loss(self, y_true, y_pred):
+        return K.mean(y_true * y_pred)
+    
+    def build_ae(self):
+
+        encoder_inputs = Input(shape=(self.max_len,))
+        self.encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="q_embedding_layer",
+                                        mask_zero=True,
+                                        trainable=True)
+
+        self.encoder_lstm = GRU(self.hidden_dim, name="q_gru")
+
+
+
+        x = self.encoder_embedding(encoder_inputs)
+        self.state = self.encoder_lstm(x)
+
+        self.mean = Dense(self.latent_dim)
+        self.var = Dense(self.latent_dim)
+
+        state_mean = self.mean(self.state)
+        state_var = self.var(self.state)
+
+        state_z = Lambda(self.sampling, name="kl")([state_mean, state_var])
+
+
+        decoder_inputs = Input(shape=(self.max_len,), name="dec_input")
+
+        self.latent2hidden = Dense(self.hidden_dim)
+        self.decoder_lstm = GRU(self.hidden_dim, return_sequences=True)
+        self.decoder_dense = Dense(self.nb_words, activation='softmax' if not self.enableWasserstein else "linear", name="rec")
+        self.decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        name="dec_embedding",
+                                        mask_zero=True,
+                                        trainable=True)
+
+        x = self.decoder_embedding(decoder_inputs)
+        decoder_outputs = self.decoder_lstm(x, initial_state=self.latent2hidden(state_z))
+        rec_outputs = self.decoder_dense(decoder_outputs)
+
+        return Model([encoder_inputs, decoder_inputs], rec_outputs), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+
+    def build_ae2(self):
+
+        encoder_inputs = Input(shape=(self.max_len,))
+        encoder_inputs2 = Input(shape=(self.max_len,))
+
+        self.encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        mask_zero=True,
+                                        trainable=True)
+
+        self.encoder_lstm = GRU(self.hidden_dim)
+
+
+
+        x = self.encoder_embedding(encoder_inputs)
+        x2 = self.encoder_embedding(encoder_inputs)
+
+        self.state = self.encoder_lstm(x)
+        self.state2 = self.encoder_lstm(x2)
+
+
+        self.mean = Dense(self.latent_dim)
+        self.var = Dense(self.latent_dim)
+
+        state_mean = self.mean(self.state)
+        state_var = self.var(self.state)
+
+        state_mean2 = self.mean(self.state2)
+        state_var2 = self.var(self.state2)
+
+        state_z = Lambda(self.sampling)([state_mean, state_var])
+        state_z2 = Lambda(self.sampling)([state_mean2, state_var2])
+
+        decoder_inputs = Input(shape=(self.max_len,))
+        decoder_inputs2 = Input(shape=(self.max_len,))
+
+
+        self.latent2hidden = Dense(self.hidden_dim)
+        self.decoder_lstm = GRU(self.hidden_dim, return_sequences=True)
+        self.decoder_dense = Dense(self.nb_words, activation='softmax' if not self.enableWasserstein else "linear")
+        self.decoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        mask_zero=True,
+                                        trainable=True)
+
+        x = self.decoder_embedding(decoder_inputs)
+        x2 = self.decoder_embedding(decoder_inputs2)
+
+        decoder_outputs = self.decoder_lstm(x, initial_state=self.latent2hidden(state_z))
+        decoder_outputs2 = self.decoder_lstm(x2, initial_state=self.latent2hidden(state_z2))
+        
+        rec_outputs = self.decoder_dense(decoder_outputs)
+        rec_outputs2 = self.decoder_dense(decoder_outputs2)
+
+        return Model([encoder_inputs, encoder_inputs2, decoder_inputs, decoder_inputs2], [rec_outputs, rec_outputs2]), Model(encoder_inputs, state_z), Model(encoder_inputs, state_mean)
+    
+    def build_gs_discriminator(self):
+        
+        inputs = Input((self.latent_dim,))
+        
+        dense1 = Dense(self.hidden_dim)
+        dense2 = Dense(self.latent_dim)
+        dense3 = Dense(1, activation="sigmoid" if not self.enableWasserstein else "linear")
+
+        outputs = dense3(dense2(dense1(inputs)))
+        
+        return Model(inputs, outputs)
+
+    def build_pairwise_model(self):
+        
+        query_sem = Input(shape=(self.latent_dim,), name="q_pair_input")
+        pos_doc_sem = Input(shape=(self.latent_dim,), name="pos_pair_input")
+        neg_doc_sem = Input(shape=(self.latent_dim,), name="neg_pair_input")
+        
+        weight = np.array([1]).reshape(1, 1, 1)
+        conv = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = dot([query_sem, neg_doc_sem], axes = 1, normalize = True) # See equation (4).
+        concat_Rs = concatenate([R_Q_D_p, R_Q_D_ns])
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+        with_gamma = conv(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+        pairwise_pred = Activation("softmax", name="pair")(with_gamma) # See equation (5).
+        
+        return Model([query_sem, pos_doc_sem, neg_doc_sem], pairwise_pred)
+    
+    def sampling(self, args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                  stddev=1)
+        return z_mean + K.exp(z_log_var / 2) * epsilon 
 
     def name(self):
-        return "vrae_kl" if self.enableKL else "vrae"
+        if self.enablePairLoss:
+            return "aae_pair_m%d" % self.mode if not self.enableWasserstein else "wae_pair_m%d" % self.mode
+        else:
+            return "aae" if not self.enableWasserstein else "wae"
 
-    def kl_loss(self, x, x_):
+    def word_dropout(self, x, unk_token):
 
-        kl_loss = - 0.5 * K.sum(1 + self.z_log_var - K.square(self.z_mean) - K.exp(self.z_log_var), axis=-1)
+        x_ = np.copy(x)
+        rows, cols = np.nonzero(x_)
+        for r, c in zip(rows, cols):
+            if random.random() <= self.keep_rate_word_dropout:
+                continue
+            x_[r][c] = unk_token
 
-        return self.kl_weight * kl_loss
+        return x_
