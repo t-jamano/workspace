@@ -263,6 +263,7 @@ if __name__ == '__main__':
 	
 
 	if limit > 1:
+
 		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.q.npy' % (path, limit))
 		d_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.d.npy' % (path, limit))
 
@@ -270,14 +271,13 @@ if __name__ == '__main__':
 		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:limit]
 
 		semi_num = limit
-		s_idx = np.arange(semi_num)
-		shuffle(s_idx)
 
-		x_val = [q_v_enc_inputs[:limit], q_v_enc_inputs[:limit], q_v_enc_inputs[:limit][s_idx]]
-		y_val = np.zeros((semi_num, 2))
+		v_idx = np.arange(len(q_v_enc_inputs))
+		shuffle(v_idx)
+
+		x_val = [q_v_enc_inputs, d_v_enc_inputs, d_v_enc_inputs[v_idx]]
+		y_val = np.zeros((len(q_v_enc_inputs), 2))
 		y_val[:, 0] = 1
-
-
 
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))[:100]
 
@@ -290,10 +290,10 @@ if __name__ == '__main__':
 
 	may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
 
-	batch_size = 32
+	batch_size = 512
 
 	step = 0
-	if isSemiExperiment:
+	if not isSemiExperiment:
 
 		if model == "dssm_s":
 
@@ -317,21 +317,29 @@ if __name__ == '__main__':
 					loss = run.model.train_on_batch(x_train, y_train)
 				
 				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-				# loss = hist.history['loss']
 				val_loss = run.model.test_on_batch(x_val, y_val)
 				t2 = time()
 				outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 				print(outputs)
-				if min_val_loss < val_loss:
+				if min_val_loss > val_loss:
 					min_val_loss = val_loss
 				else:
 					break
 	else:
+
+		semi_num = len(d_s_enc_inputs)
+		semi_idx = np.arange(semi_num)
+		step = 0
+		t1 = time()
 		for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
 			
 			df = df.dropna()
 			df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
 			train_num = len(df)
+
+			shuffle(semi_idx)
+			semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
+			semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
 
 			enablePadding = False
 			q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
@@ -347,11 +355,9 @@ if __name__ == '__main__':
 			if "dssm" in model or "binary" in model:
 
 				if isSemiExperiment:
-					mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
-					idx = []
+					mat = np.matmul(run.encoder.predict(semi_q_inputs), run.encoder.predict(d_enc_inputs).T)
 					mul = np.argsort(mat)
-					for j in range(mat.shape[0]):
-						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
+					idx = mul[:, -1]
 				else:
 					mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
 					idx = []
@@ -361,9 +367,7 @@ if __name__ == '__main__':
 
 
 			if model in ["dssm_s"]:
-				shuffle(s_idx)
-
-				x_train = [q_s_enc_inputs[s_idx], d_s_enc_inputs[s_idx], d_enc_inputs[idx]]
+				x_train = [semi_q_inputs, semi_d_inputs, d_enc_inputs[idx]]
 				y_train = np.zeros((train_num, 2))
 				y_train[:, 0] = 1
 
@@ -374,11 +378,27 @@ if __name__ == '__main__':
 				y_train[:, 0] = 1
 
 
-			
+			loss = run.model.train_on_batch(x_train, y_train)
+				
 
-			else:
-				csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
-				hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
+
+			# else:
+			# 	csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+			# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
+
+
+			if step % limit == 0 and step !=0:
+
+				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+				val_loss = run.model.test_on_batch(x_val, y_val)
+				t2 = time()
+				outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				print(outputs)
+				if min_val_loss > val_loss:
+					min_val_loss = val_loss
+				else:
+					break
+				t1 = time()
 
 			step = step + batch_size
 
