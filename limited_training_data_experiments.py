@@ -168,17 +168,6 @@ if __name__ == '__main__':
 			run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=False, enableSeparate=enableSeparate)
 
 		if pre:
-			print("here")
-			# pre_model = load_model("/work/data/models/vae_1M_QQ_ml15_2018_08_20_04:20:10_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7ff625618d68>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/vae_100K_QQ_ml15_2018_08_20_04:19:45_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7f0375376cf8>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/aae_100K_QQ_ml15_2018_08_20_18:41:49_m1_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7fe9bbde77f0>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/wae_100K_QQ_ml15_2018_08_20_18:41:31_m1_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7fe50e1aba90>_50K_BPE.encoder.h5")
-			
-			# pre_model = load_model("/work/data/models/aae_100K_QD_ml15_2018_08_20_21:31:43_m3_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7fe4ed52d080>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/aae_100K_QD_ml15_2018_08_20_21:31:20_m2_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7f5893d7da90>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/wae_100K_QD_ml15_2018_08_20_21:39:55_m3_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7faacfe62a90>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/wae_100K_QD_ml15_2018_08_20_21:39:51_m2_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7f529f716240>_50K_BPE.encoder.h5")
-			
 			# AAE
 			pre_model = load_model("/work/data/models/aae_1M_QD_ml15_2018_08_20_21:32:12_m2_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7fb673b38d68>_50K_BPE.encoder.h5")
 			# pre_model = load_model("/work/data/models/aae_1M_QQ_ml15_2018_08_20_18:41:52_m1_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7f0de3567ef0>_50K_BPE.encoder.h5")
@@ -252,21 +241,21 @@ if __name__ == '__main__':
 		d_ = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding)
 		test_set.append([q_, d_, qrel, df, i])
 
-	# =================================== Get training data ==============================================
-	if qd == "q":
-		q_enc_inputs = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
-		q_dec_inputs = np.load('%sdata/train_data/%s.q.di.npy' % (path,train_data))
-		q_dec_outputs = np.load('%sdata/train_data/%s.q.do.npy' % (path,train_data))
-	elif qd == "d" and model != "dssm":
-		q_enc_inputs = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
-		q_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
-		q_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
+	# # =================================== Get training data ==============================================
+	# if qd == "q":
+	# 	q_enc_inputs = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))
+	# 	q_dec_inputs = np.load('%sdata/train_data/%s.q.di.npy' % (path,train_data))
+	# 	q_dec_outputs = np.load('%sdata/train_data/%s.q.do.npy' % (path,train_data))
+	# elif qd == "d" and model != "dssm":
+	# 	q_enc_inputs = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
+	# 	q_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
+	# 	q_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
 
-	d_enc_inputs = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
-	d_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
-	d_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
+	# d_enc_inputs = np.load('%sdata/train_data/%s.d.npy' % (path,train_data))
+	# d_dec_inputs = np.load('%sdata/train_data/%s.d.di.npy' % (path,train_data))
+	# d_dec_outputs = np.load('%sdata/train_data/%s.d.do.npy' % (path,train_data))
 
-	labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))
+	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))
 
 	# feay
 	# q_enc_inputs = np.load('%sdata/train_data/%s.q.npy' % (path,train_data))[:100]
@@ -279,8 +268,6 @@ if __name__ == '__main__':
 
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))[:100]
 
-	query = [q_enc_inputs, q_dec_inputs, q_dec_outputs]
-	docs = [d_enc_inputs, d_dec_inputs, d_dec_outputs]
 
 	real = np.ones((len(q_enc_inputs), 1))
 	fake = np.zeros((len(q_enc_inputs), 1)) if "wae" not in model else -valid
@@ -292,36 +279,6 @@ if __name__ == '__main__':
 
 	train_num = len(labels)
 
-	def train_model(epoch, min_val_loss, save):
-		t1 = time()
-		stop = False
-		hist = run.model.fit(x_train, y_train,
-									        shuffle=True,
-									        epochs=1,
-									        verbose=0,
-									        batch_size=batch_size,
-									        validation_split=0.2,
-									        callbacks=[EarlyStopping()]
-									        )
-		val_loss = hist.history['val_loss'][-1]
-		t2 = time()
-		if min_val_loss < val_loss:
-			stop = True
-		else:
-			min_val_loss = val_loss
-			losses = ', '.join([ "%s = %f" % (k, hist.history[k][-1]) for k in hist.history])
-			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-			print_output = '%s, Epoch %d, Iteration %d,  [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, Loss = %.4f, V_Loss = %.4f \n' % (run.name(), epoch, 0, t2-t1, 0, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, hist.history['loss'][-1], hist.history['val_loss'][-1])
-			file_output = '%s, Epoch %d, Iteration %d, [%.1f s - %.1f s], May = %.4f, June = %.4f, July = %.4f, Quora = %.4f, Para = %.4f, STS = %.4f, %s \n' % (run.name(), epoch, 0, t2-t1, 0, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc, losses)
-			write_to_files(run, print_output, file_output, path, model_name, model, save)
-			# print("%s,%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, train_data, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc))
-		print(val_loss)
-		generate_reconstruct_query(run.model, bpe, [x_train[0][:5], x_train[1][:5]])
-		return min_val_loss, stop
-
-	# random.seed(0)
-	# idx = np.arange(train_num)
-	# shuffle(idx)
 
 	if model in ["vae","cvae", "s2s", "vae_max", "vae_bi"]:
 
