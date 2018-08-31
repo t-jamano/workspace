@@ -242,14 +242,15 @@ class Seq2Seq():
                                         self.embedding_matrix.shape[-1],
                                         weights=[self.embedding_matrix],
                                         input_length=self.max_len,
-                                        name="enc_embedding",
+                                        name="q_embedding",
                                         mask_zero=True,
                                         trainable=True)
-
-        encoder_lstm = GRU(hidden_dim, return_state=True, name="enc_gru")
-
-        x = encoder_embedding(encoder_inputs)
-        _, state = encoder_lstm(x)
+        dense = Dense(latent_dim, activation="tanh")
+        encoder_lstm = Bidirectional(GRU(self.hidden_dim, return_sequences=True), name="q_gru")
+        state = dense(GlobalMaxPooling1D()(encoder_lstm(encoder_embedding(encoder_inputs))))
+        
+        # x = encoder_embedding(encoder_inputs)
+        # _, state = encoder_lstm(x)
 
         
         mean = Dense(latent_dim)
@@ -267,7 +268,7 @@ class Seq2Seq():
 
         # model with no kl loss
         if self.enableS2S and not self.enableKL:
-            state_z = state_mean
+            state_z = state
         else:
             if self.comp_topk != None:
                 state_mean_k = KCompetitive(self.comp_topk, self.ctype)(state_mean)

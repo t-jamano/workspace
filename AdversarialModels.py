@@ -60,7 +60,6 @@ class PRA():
         gs_latents = normal_latent_sampling((self.latent_dim,))(q_inputs)
 
         
-        
         if self.enableGRU:
             # rec_outputs = [ae_decoders([ae_encoders(i), j]) for i, j in zip(main_latents, dec_inputs)]
             rec_outputs = ae_decoders([ae_enc_latents, dec_inputs])
@@ -120,8 +119,8 @@ class PRA():
         # gen_weights = [{"loss_weights": {"pr_q_fake": 1e-3, "pr_pd_fake": 1e-3, "pr_nd_fake": 1e-3, "pr_y_real": -1e-3, "q_yfake": 1e-3, "pd_yfake": 1e-3, "nd_yfake": 1e-3, "q_yreal": -1e-3, "pd_yreal": -1e-3, "nd_yreal": -1e-3, "q_pred": 1e-1, "pd_pred": 1e-1, "nd_pred": 1e-1, "pair": 1}}]
         # dis_weights = [{"loss_weights": {"pr_q_fake": -1e-3, "pr_pd_fake": -1e-3, "pr_nd_fake": -1e-3, "pr_y_real": 1e-3, "q_yfake": -1e-3, "pd_yfake": -1e-3, "nd_yfake": -1e-3, "q_yreal": 1e-3, "pd_yreal": 1e-3, "nd_yreal": 1e-3, "q_pred": 1e-1, "pd_pred": 1e-1, "nd_pred": 1e-1, "pair": 1}}]
         
-        gen_weights = [{"loss_weights": {"pr_yfake": 1e-4, "pr_yreal": -1e-4, "yfake": 1e-4, "yreal": 1e-3, "rec": 1e-3, "pair": 1}}]
-        dis_weights = [{"loss_weights": {"pr_yfake": -1e-4, "pr_yreal": 1e-4, "yfake": 1e-4, "yreal": 1e-3, "rec": 1e-3, "pair": 1}}]
+        gen_weights = [{"loss_weights": {"pr_yfake": 1e-4, "pr_yreal": -1e-4, "yfake": 1e-4, "yreal": 1e-4, "rec": 1e-2, "pair": 1}}]
+        dis_weights = [{"loss_weights": {"pr_yfake": -1e-4, "pr_yreal": 1e-4, "yfake": 1e-4, "yreal": 1e-4, "rec": 1e-2, "pair": 1}}]
       
         # losses = {"q_yfake": self.dis_loss, "q_yreal": self.dis_loss,
         #                             "pd_yfake": self.dis_loss, "pd_yreal": self.dis_loss,
@@ -159,14 +158,14 @@ class PRA():
                                         self.embedding_matrix.shape[-1],
                                         weights=[self.embedding_matrix],
                                         input_length=self.max_len,
-                                        name="enc_embedding",
+                                        name="q_embedding",
                                         mask_zero=False if not self.enableGRU else True,
                                         trainable=True)
         hidden2latent = Dense(self.latent_dim)
 
         if self.enableGRU:
-            encoder_gru = GRU(self.hidden_dim, name="enc_gru")
-            outputs = hidden2latent(encoder_gru(encoder_embedding(inputs)))
+            encoder_gru = Bidirectional(GRU(self.hidden_dim, return_sequences=True), name='q_gru')
+            outputs = hidden2latent(GlobalMaxPooling1D()((encoder_gru(encoder_embedding(inputs)))))
         else:
             outputs = hidden2latent(GlobalAveragePooling1D()(encoder_embedding(inputs)))
         
@@ -198,7 +197,8 @@ class PRA():
                                             name="dec_embedding",
                                             mask_zero=True,
                                             trainable=True)
-            decoder_lstm = GRU(self.hidden_dim, return_sequences=True, name="dec_gru")
+
+            decoder_lstm = Bidirectional(GRU(self.hidden_dim, return_sequences=True, name="dec_gru"))
             decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
 
             embed_x = decoder_embedding(inputs)
@@ -305,7 +305,7 @@ class PRA2(PRA):
         pair_latents = [pair_encoder(i) for i in inputs]
         rec_latents = [rec_encoder(i) for i in inputs]
         
-        main_latents = [merge([i, j], mode="mul") for i, j in zip(pair_latents, rec_latents)]
+        main_latents = [merge([i, j], mode="concat") for i, j in zip(pair_latents, rec_latents)]
         
 
         ae_enc_latents = [ae_encoders(i) for i in main_latents]

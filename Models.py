@@ -547,8 +547,21 @@ class S2S_AAE(object):
 
         return x_
 
+class BOE():
+    def __init__(self, nb_words=50005, max_len=10, embedding_matrix=None):
+
+        q_embed_layer = Embedding(nb_words,
+                    embedding_matrix.shape[-1],
+                    weights=[embedding_matrix],
+                    input_length=max_len,
+                    name="q_embedding",
+                    trainable=True)
+
+        self.encoder = Sequential([q_embed_layer, GlobalMaxPooling1D()])
+    def name(self):
+        return "boe"
 class BinaryClassifier():
-    
+
     def __init__(self, hidden_dim=300, latent_dim=128, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max", mode=1):
 
         self.hidden_dim = hidden_dim
@@ -567,60 +580,48 @@ class BinaryClassifier():
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
-                    mask_zero=True if self.enableLSTM else False,
+                    # mask_zero=True,
+                    name="q_embedding",
                     trainable=True)
 
-        d_embed_layer = Embedding(nb_words,
-                    embedding_matrix.shape[-1],
-                    weights=[embedding_matrix],
-                    input_length=max_len,
-                    mask_zero=True if self.enableLSTM else False,
-                    trainable=True)
+        d_embed_layer = q_embed_layer
         
-        q_bilstm = GRU(hidden_dim, return_sequences=False)
-        d_bilstm = GRU(hidden_dim, return_sequences=False)
+        q_bilstm = Bidirectional(GRU(hidden_dim, return_sequences=True), name='q_gru')
+        d_bilstm = q_bilstm
 
         Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
+        hidden2latent = Dense(latent_dim, activation="tanh", name="q_dense")
 
-        norm = BatchNormalization()
-        if self.enableLSTM:
-            query_sem = q_bilstm(q_embed_layer(query))
-            doc_sem = d_bilstm(d_embed_layer(doc))
-        else:
-            query_sem = Pooling(q_embed_layer(query))
-            doc_sem = Pooling(d_embed_layer(doc)) 
-
-
-        # def exponent_neg_manhattan_distance(left, right):
-        #     ''' Helper function for the similarity estimate of the LSTMs outputs'''
-        #     return K.exp(-K.sum(K.abs(left-right), axis=1, keepdims=True))
-
-
-        # cos = merge([query_sem, doc_sem], mode=lambda x: exponent_neg_manhattan_distance(x[0], x[1]), output_shape=lambda x: (x[0][0], 1))
-
-
+        query_sem = hidden2latent(GlobalMaxPooling1D()(q_bilstm(q_embed_layer(query))))
+        doc_sem = hidden2latent(GlobalMaxPooling1D()(d_bilstm(d_embed_layer(doc))))
+        # query_sem = hidden2latent(q_bilstm(q_embed_layer(query)))
+        # doc_sem = hidden2latent(d_bilstm(d_embed_layer(doc)))
+        # query_sem = GlobalMaxPooling1D()(q_bilstm(q_embed_layer(query)))
+        # doc_sem = GlobalMaxPooling1D()(d_bilstm(d_embed_layer(doc)))
 
 # #       concat > mul > cos
 #         # old
-        cos = merge([query_sem, doc_sem], mode="cos")
-#         cos = BatchNormalization()(cos)
+        cos = Flatten()(merge([query_sem, doc_sem], mode="cos"))
+        # cos = BatchNormalization()(cos)
 #         cos = Dropout(0.2)(cos)
 #         # concat = Concatenate()([query_sem, doc_sem])
 #         # sub = Subtract()([query_sem, doc_sem])
 #         # mul = Multiply()([query_sem, doc_sem])
 #         # merge_all = merge([concat, sub, mul], mode="concat")
 
+        # latent2hidden = Dense(hidden_dim, activation="relu")
+        # cos = Activation("sigmoid")(cos)
+        # cos = latent2hidden(cos)
+        # pred = Dense(1, activation="sigmoid")(cos)
 
-        pred = Dense(1, activation="sigmoid")(cos)
-
-        self.model = Model([query, doc] , pred)
+        self.model = Model([query, doc] , cos)
         self.model.compile(optimizer = optimizer, loss = "binary_crossentropy", metrics=["accuracy"])
         # self.model.compile(optimizer = optimizer, loss = "mean_squared_error", metrics=["accuracy"])
         # cosine_proximity
         self.encoder = Model(inputs=query, outputs=query_sem)
 
     def name(self):
-        return "binary_gru" if self.enableLSTM else "binary_%s" % self.PoolMode
+        return "binary" if self.enableLSTM else "binary_%s" % self.PoolMode
 
 
 class AdversarialPairwiseModel(object):
@@ -898,7 +899,7 @@ class AdversarialPairwiseModel(object):
     
 class DSSM():
     
-    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max", enableHybrid=False):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, enableLSTM=False, enableSeparate=False, PoolMode="max", enableHybrid=False, limit=None):
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -909,6 +910,7 @@ class DSSM():
         self.enableLSTM = enableLSTM
         self.PoolMode = PoolMode
         self.enableHybrid = enableHybrid
+        self.limit = limit
 
         # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
         # The first dimension is None because the queries and documents can vary in length.
@@ -920,23 +922,26 @@ class DSSM():
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
-                    name="q_embedding_layer",
-                    mask_zero=True if self.enableLSTM else False,
+                    name="q_embedding",
+                    mask_zero=False if self.enableLSTM else False,
                     trainable=True)
 
 
         
-        bilstm = Bidirectional(GRU(hidden_dim, name='q_gru', return_sequences=False, trainable=True))
+        # bilstm = GRU(hidden_dim, name='q_gru', return_sequences=False, trainable=True)
+        bilstm = Bidirectional(GRU(hidden_dim, return_sequences=True, trainable=True), name='q_gru', trainable=True)
 
         if enableSeparate:
             d_embed_layer = Embedding(nb_words,
                     embedding_matrix.shape[-1],
                     weights=[embedding_matrix],
                     input_length=max_len,
-                    name="d_embedding_layer",
-                    mask_zero=True if self.enableLSTM else False,
+                    name="d_embedding",
+                    mask_zero=False if self.enableLSTM else False,
                     trainable=True)
-            d_bilstm = Bidirectional(GRU(hidden_dim, name="d_gru"))
+            # d_bilstm = GRU(hidden_dim, name="d_gru")
+            d_bilstm = Bidirectional(GRU(hidden_dim, return_sequences=True, trainable=True), name='d_gru')
+
 
         if self.enableHybrid:
             bpe_embed_layer = Embedding(nb_words,
@@ -949,6 +954,8 @@ class DSSM():
 
         Pooling = GlobalMaxPooling1D() if self.PoolMode == "max" else GlobalAveragePooling1D()
 
+        dense = Dense(latent_dim, activation="tanh", name="q_dense")
+
         if self.enableLSTM:
             if enableHybrid:
                 # query_sem = merge([bilstm(embed_layer(query)), bpe_bilstm(bpe_embed_layer(query))], mode="concat")
@@ -956,8 +963,12 @@ class DSSM():
                 query_sem = bilstm(merge([embed_layer(query), bpe_embed_layer(query)]))
             else:
                 query_sem = bilstm(embed_layer(query))
+                query_sem = dense(GlobalMaxPooling1D()(query_sem))
+
             pos_doc_sem = bilstm(embed_layer(pos_doc)) if not enableSeparate else d_bilstm(d_embed_layer(pos_doc))
+            pos_doc_sem = dense(GlobalMaxPooling1D()(pos_doc_sem))
             neg_doc_sems = [bilstm(embed_layer(neg_doc)) for neg_doc in neg_docs] if not enableSeparate else [d_bilstm(d_embed_layer(neg_doc)) for neg_doc in neg_docs]
+            neg_doc_sems = [dense(GlobalMaxPooling1D()(i)) for i in neg_doc_sems]
         else:
             query_sem = Pooling(embed_layer(query))
             pos_doc_sem = Pooling(embed_layer(pos_doc)) if not enableSeparate else Pooling(d_embed_layer(pos_doc))
@@ -998,9 +1009,12 @@ class DSSM():
         self.model.compile(optimizer = optimizer, loss = "categorical_crossentropy")
 
         self.encoder = Model(inputs=query, outputs=query_sem)
+        # self.model.summary()
 
     def name(self):
-        if self.enableLSTM:
+        if self.enableLSTM and self.limit != None:
+            return "dssm_s_%d" % self.limit
+        elif self.enableLSTM:
             return "dssm_gru2" if self.enableSeparate else "dssm_gru"
         else:
             return "dssm2_%s" % self.PoolMode if self.enableSeparate else "dssm_%s" % self.PoolMode

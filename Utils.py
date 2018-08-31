@@ -101,7 +101,7 @@ def ranking_measure(qrel, pred):
 
     return ndcg_score, map_score
 
-def evaluate(run, test_set):
+def evaluate(run, test_set, model_name=None):
     may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
     for q, d, qrel, df, test_data in test_set:
     
@@ -110,6 +110,7 @@ def evaluate(run, test_set):
         cosine = CosineSim(q_.shape[-1])
 
         pred = cosine.model.predict([q_, d_]).flatten()
+        # pred = run.predict([q, d], batch_size=1024).flatten()
         
         if test_data in ["MayFlower", "JuneFlower"]:
             pred = convert_2_trec(df.q.tolist(), df.d.tolist(), pred, False)
@@ -128,6 +129,9 @@ def evaluate(run, test_set):
             quora_auc = auc(qrel, pred)
         elif test_data in ["sts"]:
             sts_pcc = scipy.stats.pearsonr(pred, qrel)[0]
+
+
+
 
     return may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc
 
@@ -160,6 +164,15 @@ def toBOW(x, nb_words):
         x_[idx][i] = 1
     return x_
 
+def addTags(x, bpe_dict, max_len):
+    dec_input = np.copy(x)
+    dec_output = np.copy(x)
+    for i in range(len(x)):
+        dec_input[i] = [bpe_dict['<sos>']] + dec_input[i] + [bpe_dict['<eos>']]
+        dec_output[i] = dec_output[i] + [bpe_dict['<eos>']]
+
+    return pad_sequences(dec_input, maxlen=max_len, padding="post"), pad_sequences(dec_output, maxlen=max_len, padding="post")
+
 def sent_generator(reader, tokeniser, batch_size, max_len, feature_num):
     for df in reader:
         q = pad_sequences(tokeniser.texts_to_sequences(df.q.tolist()), maxlen=max_len)
@@ -171,31 +184,22 @@ def sent_generator(reader, tokeniser, batch_size, max_len, feature_num):
         yield q, q_one_hot
 
 
-def generate_output(model, bpe, x, nrows=None, idx=None):
+def generate_output(model, bpe, x, idx=None):
 
     gen_x = np.argmax(model.predict(x), axis=-1) if idx == None else np.argmax(model.predict(x)[idx], axis=-1)
 
-    bleu = []
     results = ""
-    for i, k in zip(gen_x, x):
+    for i, k in zip(gen_x, x[0]):
         gen_x = " ".join([bpe.index2word[t] for t in i])
         real_x = " ".join([bpe.index2word[t] for t in k])
 
-        bleu.append(sentence_bleu(real_x, gen_x))
-        
         real_x = real_x.replace("▁the", "")
         real_x = real_x.replace("▁","")
         gen_x = gen_x.replace("▁the", "")
         gen_x = gen_x.replace("▁","")
-        if nrows != None:
-            if nrows == 0:
-                break
-            else:
-                nrows = nrows - 1
-        
-        results = results + "%s : %s\n\n" % (real_x, gen_x)
-    print("BLEU: %.4f" % np.mean(bleu))
-    print(results)
+
+        results = results + "%s : %s" % (real_x, gen_x)
+    return results
 
 
 def get_test_data(filename, path):
@@ -394,9 +398,9 @@ def generate_reconstruct_query(model, bpe, x, idx=None):
         print("%s\t%s" % (real_x, gen_x))
         results.append("%s\t%s" % (real_x, gen_x))
 
-def output_to_file(model_name, file_output):
-    with open("/work/data/logs/%s.out" % (model_name), "a") as myfile:
-        myfile.write(file_output)
+def output_to_file(model_name, file_output, file_format=".out"):
+    with open("/work/data/logs/%s%s" % (model_name, file_format), "a") as myfile:
+        myfile.write(file_output+"\n")
 
 def write_to_files(run, print_output, file_output, path, model_name, model, save=False):
     print(print_output)
