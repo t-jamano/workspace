@@ -186,6 +186,9 @@ if __name__ == '__main__':
 	elif model == "aae":
 	    run = AdversarialAutoEncoderModel(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, keep_rate_word_dropout=keep_rate_word_dropout, enableWasserstein=False, mode=mode)
 
+	elif model == "dssm_aae_s":
+		run = DSSM_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, keep_rate_word_dropout=keep_rate_word_dropout, enableSemi=True, limit=limit)
+
 	elif model == "wae":
 	    run = AdversarialAutoEncoderModel(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, keep_rate_word_dropout=keep_rate_word_dropout, enableWasserstein=True, mode=mode)
 
@@ -293,114 +296,124 @@ if __name__ == '__main__':
 	batch_size = 512
 
 	step = 0
-	if not isSemiExperiment:
+	# if not isSemiExperiment:
 
-		if model == "dssm_s":
+	# 	if model == "dssm_s":
 
-			for epoch in range(100):
-				t1 = time()
-				for i in range(0, len(q_s_enc_inputs), batch_size):
-					q = q_s_enc_inputs[i: i + batch_size]
-					d = d_s_enc_inputs[i: i + batch_size]
-					train_num = len(q)
+	# 		for epoch in range(100):
+	# 			t1 = time()
+	# 			for i in range(0, len(q_s_enc_inputs), batch_size):
+	# 				q = q_s_enc_inputs[i: i + batch_size]
+	# 				d = d_s_enc_inputs[i: i + batch_size]
+	# 				train_num = len(q)
 
-					mat = np.matmul(run.encoder.predict(q), run.encoder.predict(d).T)
-					idx = []
-					mul = np.argsort(mat)
-					for j in range(mat.shape[0]):
-						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
+	# 				mat = np.matmul(run.encoder.predict(q), run.encoder.predict(d).T)
+	# 				idx = []
+	# 				mul = np.argsort(mat)
+	# 				for j in range(mat.shape[0]):
+	# 					idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
 
-					x_train = [q, d, d[idx]]
-					y_train = np.zeros((train_num, 2))
-					y_train[:, 0] = 1
+	# 				x_train = [q, d, d[idx]]
+	# 				y_train = np.zeros((train_num, 2))
+	# 				y_train[:, 0] = 1
 
-					loss = run.model.train_on_batch(x_train, y_train)
+	# 				loss = run.model.train_on_batch(x_train, y_train)
 				
-				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-				val_loss = run.model.test_on_batch(x_val, y_val)
-				t2 = time()
-				outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
-				print(outputs)
-				if min_val_loss > val_loss:
-					min_val_loss = val_loss
-				else:
-					break
-	else:
+	# 			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+	# 			val_loss = run.model.test_on_batch(x_val, y_val)
+	# 			t2 = time()
+	# 			outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+	# 			print(outputs)
+	# 			if min_val_loss > val_loss:
+	# 				min_val_loss = val_loss
+	# 			else:
+	# 				break
+	# else:
 
-		semi_num = len(d_s_enc_inputs)
-		semi_idx = np.arange(semi_num)
-		step = 0
-		t1 = time()
-		for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
+	semi_num = len(d_s_enc_inputs)
+	semi_idx = np.arange(semi_num)
+	step = 0
+	t1 = time()
+	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
+		
+		df = df.dropna()
+		df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
+		train_num = len(df)
+
+		shuffle(semi_idx)
+		semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
+		semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
+
+		enablePadding = False
+		q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+		d_df = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+
+		q_dec_inputs, q_dec_outputs = addTags(q_df, bpe_dict, max_len)
+		d_dec_inputs, d_dec_outputs = addTags(d_df, bpe_dict, max_len)
+
+		enablePadding = True
+		q_enc_inputs = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+		d_enc_inputs = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+
+		if "dssm" in model or "binary" in model:
+
+			if isSemiExperiment:
+				mat = np.matmul(run.encoder.predict(semi_q_inputs), run.encoder.predict(d_enc_inputs).T)
+				mul = np.argsort(mat)
+				idx = mul[:, -1]
+			else:
+				mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
+				idx = []
+				mul = np.argsort(mat)
+				for j in range(mat.shape[0]):
+					idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
+
+
+		if model in ["dssm_s", "dssm_aae_s"]:
+			x_train = [semi_q_inputs, semi_d_inputs, d_enc_inputs[idx]]
+			y_train = np.zeros((train_num, 2))
+			y_train[:, 0] = 1
+
+			if model == "dssm_aae_s":
+				ae_x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
+				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				real = np.ones((len(y_), 1))
+				fake = np.zeros((len(y_), 1)) if "wae" not in model else -valid
+				ae_y_train = [y_, real, fake, y_, fake, real]
+
+				loss = run.semi_model.train_on_batch(ae_x_train, ae_y_train)
+
+
+		elif model in ["dssm"]:
+
+			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
+			y_train = np.zeros((train_num, 2))
+			y_train[:, 0] = 1
+
+
+		loss = run.model.train_on_batch(x_train, y_train)
 			
-			df = df.dropna()
-			df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
-			train_num = len(df)
-
-			shuffle(semi_idx)
-			semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
-			semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
-
-			enablePadding = False
-			q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-			d_df = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-
-			q_dec_inputs, q_dec_outputs = addTags(q_df, bpe_dict, max_len)
-			d_dec_inputs, d_dec_outputs = addTags(d_df, bpe_dict, max_len)
-
-			enablePadding = True
-			q_enc_inputs = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-			d_enc_inputs = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-
-			if "dssm" in model or "binary" in model:
-
-				if isSemiExperiment:
-					mat = np.matmul(run.encoder.predict(semi_q_inputs), run.encoder.predict(d_enc_inputs).T)
-					mul = np.argsort(mat)
-					idx = mul[:, -1]
-				else:
-					mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
-					idx = []
-					mul = np.argsort(mat)
-					for j in range(mat.shape[0]):
-						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
 
 
-			if model in ["dssm_s"]:
-				x_train = [semi_q_inputs, semi_d_inputs, d_enc_inputs[idx]]
-				y_train = np.zeros((train_num, 2))
-				y_train[:, 0] = 1
-
-			elif model in ["dssm"]:
-
-				x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
-				y_train = np.zeros((train_num, 2))
-				y_train[:, 0] = 1
+		# else:
+		# 	csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+		# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
 
 
-			loss = run.model.train_on_batch(x_train, y_train)
-				
+		if step % (batch_size * 100) == 0 and step !=0:
 
+			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+			val_loss = run.model.test_on_batch(x_val, y_val)
+			t2 = time()
+			outputs = "%s,%.1fs,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, step, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+			print(outputs)
+			if min_val_loss > val_loss:
+				min_val_loss = val_loss
+			else:
+				break
+			t1 = time()
 
-			# else:
-			# 	csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
-			# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
-
-
-			if step % limit == 0 and step !=0:
-
-				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-				val_loss = run.model.test_on_batch(x_val, y_val)
-				t2 = time()
-				outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
-				print(outputs)
-				if min_val_loss > val_loss:
-					min_val_loss = val_loss
-				else:
-					break
-				t1 = time()
-
-			step = step + batch_size
+		step = step + batch_size
 
 
 

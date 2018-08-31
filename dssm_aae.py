@@ -2,7 +2,7 @@ from Models import *
 
 class DSSM_AAE():
     
-    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_rate=0.01, keep_rate_word_dropout=0.5, enableKL=True, enableCond=False, enableWasserstein=False, mode=1, enableSemi=False, limit=1):
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), keep_rate_word_dropout=0.5, enableWasserstein=False, mode=1, enableSemi=False, limit=1):
 
         self.dim = dim
         self.nb_words = nb_words
@@ -10,9 +10,6 @@ class DSSM_AAE():
         self.embedding_matrix = embedding_matrix
         self.optimizer = optimizer
         self.keep_rate_word_dropout = keep_rate_word_dropout
-        self.kl_rate = kl_rate
-        self.enableKL = enableKL
-        self.enableCond = enableCond
         self.num_negatives = 1
         self.hidden_dim = self.dim[0]
         self.latent_dim = self.dim[1]
@@ -149,7 +146,7 @@ class DSSM_AAE():
             # original 1e-4, 1e-2
             # try 1e-2, 1e-1
             # try 1e-1, 0.5
-            self.semi_model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-2, "qreal": 1e-2, "qpred": 1e-1}}] * 2)
+            self.semi_model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-4, "qreal": 1e-4, "qpred": 1e-2}}] * 2)
             self.model = Model([query_inputs, doc_inputs, neg_doc_inputs], [pairwise_pred])
             self.model.compile(optimizer=self.optimizer, loss=["categorical_crossentropy"])  
         else:
