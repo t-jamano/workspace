@@ -232,7 +232,8 @@ if __name__ == '__main__':
 	limit = limit if model in ["dssm_s", "dssm_aae_s"] else 1
 	model_name = "%s_m%d_%s_limit%d_%s" % (run.name(), mode, train_data, limit, date_time)
 
-	enableValidation = True if model in ["dssm_aae_s", "dssm_s"] else False
+	isSemiExperiment = True if model in ["dssm_aae_s", "dssm_s"] else False
+
 	# =================================== Get testing data ==============================================
 	test_set = []
 	for i in ["MayFlower", "JuneFlower", "JulyFlower", "sts", "quora", "para"]:
@@ -263,17 +264,17 @@ if __name__ == '__main__':
 
 	if limit > 1:
 		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.q.npy' % (path, limit))
-		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.d.npy' % (path, limit))
+		d_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.d.npy' % (path, limit))
 
 		q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))[:limit]
 		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:limit]
 
-		val_num = limit
-		v_idx = np.arange(val_num)
-		shuffle(v_idx)
+		semi_num = limit
+		s_idx = np.arange(semi_num)
+		shuffle(s_idx)
 
-		x_val = [q_v_enc_inputs[:limit], q_v_enc_inputs[:limit], q_v_enc_inputs[:limit][v_idx]]
-		y_val = np.zeros((val_num, 2))
+		x_val = [q_v_enc_inputs[:limit], q_v_enc_inputs[:limit], q_v_enc_inputs[:limit][s_idx]]
+		y_val = np.zeros((semi_num, 2))
 		y_val[:, 0] = 1
 
 
@@ -292,61 +293,94 @@ if __name__ == '__main__':
 	batch_size = 32
 
 	step = 0
-	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
-		
-		df = df.dropna()
-		df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
-		train_num = len(df)
+	if isSemiExperiment:
 
-		enablePadding = False
-		q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-		d_df = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+		if model == "dssm_s":
 
-		q_dec_inputs, q_dec_outputs = addTags(q_df, bpe_dict, max_len)
-		d_dec_inputs, d_dec_outputs = addTags(d_df, bpe_dict, max_len)
+			for epoch in range(100):
+				t1 = time()
+				for i in range(0, len(q_s_enc_inputs), batch_size):
+					q = q_s_enc_inputs[i: i + batch_size]
+					d = d_s_enc_inputs[i: i + batch_size]
+					train_num = len(q)
 
-		enablePadding = True
-		q_enc_inputs = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
-		d_enc_inputs = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+					mat = np.matmul(run.encoder.predict(q), run.encoder.predict(d).T)
+					idx = []
+					mul = np.argsort(mat)
+					for j in range(mat.shape[0]):
+						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
 
-		if "dssm" in model or "binary" in model:
+					x_train = [q, d, d[idx]]
+					y_train = np.zeros((train_num, 2))
+					y_train[:, 0] = 1
 
-			mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
-			idx = []
-			mul = np.argsort(mat)
-			for j in range(mat.shape[0]):
-				idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
-
-
-		if "dssm" in model:
-			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
-			y_train = np.zeros((train_num, 2))
-			y_train[:, 0] = 1
-
-
-		if enableValidation:
-
-			x_val = [q_v_enc_inputs[v_idx][:train_num], q_v_enc_inputs[v_idx][:train_num], q_v_enc_inputs[v_idx][:train_num][idx]]
-			y_val = y_train
-
-			hist = run.model.fit(x_train, y_train, verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=False)
-			
-			
-
-			if step % limit == 0 and step != 0:
+					loss = run.model.train_on_batch(x_train, y_train)
+				
 				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-				loss = hist.history['loss'][-1]
-				hist = run.model.test_on_batch(x_val, y_val)
-				print(hist)
-				# outputs = "%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				# loss = hist.history['loss']
+				val_loss = run.model.test_on_batch(x_val, y_val)
+				t2 = time()
+				outputs = "%s,%.1fs,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 				print(outputs)
-				break
+				if min_val_loss < val_loss:
+					min_val_loss = val_loss
+				else:
+					break
+	else:
+		for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
+			
+			df = df.dropna()
+			df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
+			train_num = len(df)
 
-		else:
-			csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
-			hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
+			enablePadding = False
+			q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+			d_df = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
 
-		step = step + batch_size
+			q_dec_inputs, q_dec_outputs = addTags(q_df, bpe_dict, max_len)
+			d_dec_inputs, d_dec_outputs = addTags(d_df, bpe_dict, max_len)
+
+			enablePadding = True
+			q_enc_inputs = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+			d_enc_inputs = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
+
+			if "dssm" in model or "binary" in model:
+
+				if isSemiExperiment:
+					mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
+					idx = []
+					mul = np.argsort(mat)
+					for j in range(mat.shape[0]):
+						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
+				else:
+					mat = np.matmul(run.encoder.predict(q_enc_inputs), run.encoder.predict(d_enc_inputs).T)
+					idx = []
+					mul = np.argsort(mat)
+					for j in range(mat.shape[0]):
+						idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
+
+
+			if model in ["dssm_s"]:
+				shuffle(s_idx)
+
+				x_train = [q_s_enc_inputs[s_idx], d_s_enc_inputs[s_idx], d_enc_inputs[idx]]
+				y_train = np.zeros((train_num, 2))
+				y_train[:, 0] = 1
+
+			elif model in ["dssm"]:
+
+				x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
+				y_train = np.zeros((train_num, 2))
+				y_train[:, 0] = 1
+
+
+			
+
+			else:
+				csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+				hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
+
+			step = step + batch_size
 
 
 
