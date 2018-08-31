@@ -259,12 +259,24 @@ if __name__ == '__main__':
 
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))
 
-	q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))
-	d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))
-	val_num = len(q_v_enc_inputs)
-	v_idx = np.arange(val_num)
-	shuffle(v_idx)
-	neg_d_v_enc_inputs = d_v_enc_inputs[v_idx]
+	
+
+	if limit > 1:
+		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.q.npy' % (path, limit))
+		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.d.npy' % (path, limit))
+
+		q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))[:limit]
+		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:limit]
+
+		val_num = len(limit)
+		v_idx = np.arange(val_num)
+		shuffle(v_idx)
+
+		x_val = [q_v_enc_inputs[:limit], q_v_enc_inputs[:limit], q_v_enc_inputs[:limit][v_idx]]
+		y_val = np.zeros((val_num, 2))
+		y_val[:, 0] = 1
+
+
 
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))[:100]
 
@@ -278,6 +290,8 @@ if __name__ == '__main__':
 	may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
 
 	batch_size = 32
+
+	step = 0
 	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
 		
 		df = df.dropna()
@@ -311,25 +325,28 @@ if __name__ == '__main__':
 
 
 		if enableValidation:
-			shuffle(v_idx)
+
 			x_val = [q_v_enc_inputs[v_idx][:train_num], q_v_enc_inputs[v_idx][:train_num], q_v_enc_inputs[v_idx][:train_num][idx]]
 			y_val = y_train
 
-			hist = run.model.fit(x_train, y_train, validation_data=(x_val, y_val),verbose=1, batch_size=batch_size, nb_epoch=1, shuffle=False)
+			hist = run.model.fit(x_train, y_train, verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=False)
 			
-			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
 			
-			loss = hist.history['loss'][-1]
-			val_loss = hist.history['val_loss'][-1]
 
-			outputs = "%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
-			print(outputs)
+			if step % limit == 0 and step != 0:
+				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+				loss = hist.history['loss'][-1]
+				hist = run.model.test_on_batch(x_train, y_train, verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=False)
+				print(hits)
+				# outputs = "%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				print(outputs)
+				break
 
 		else:
 			csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
 			hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
 
-		break
+		step = step + batch_size
 
 
 
