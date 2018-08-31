@@ -268,7 +268,7 @@ if __name__ == '__main__':
 		q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))[:limit]
 		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:limit]
 
-		val_num = len(limit)
+		val_num = limit
 		v_idx = np.arange(val_num)
 		shuffle(v_idx)
 
@@ -336,8 +336,8 @@ if __name__ == '__main__':
 			if step % limit == 0 and step != 0:
 				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
 				loss = hist.history['loss'][-1]
-				hist = run.model.test_on_batch(x_train, y_train, verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=False)
-				print(hits)
+				hist = run.model.test_on_batch(x_val, y_val)
+				print(hist)
 				# outputs = "%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 				print(outputs)
 				break
