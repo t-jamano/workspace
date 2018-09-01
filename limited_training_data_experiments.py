@@ -451,13 +451,21 @@ if __name__ == '__main__':
 
 				t1 = time()
 
+				if model in ["dssm_s", "dssm_aae_s"] and (step / limit) >= 100:
+					break
+
 		except Exception as e:
 			print(e)
 			pass
+
+		
+
 			
 
 		step = step + batch_size
 		kl_step = kl_step + 1
+
+
 
 	# try:
 			

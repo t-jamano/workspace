@@ -164,7 +164,7 @@ class DSSM_AAE():
             self.model = AdversarialModel(base_model=self.aae, player_params=[generative_params, discriminative_params], player_names=["generator", "discriminator"])        
             rec_loss = "sparse_categorical_crossentropy"
             pair_loss = "categorical_crossentropy"
-            self.model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss,"pair":pair_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-2, "qreal": 1e-2, "qpred": 1e-1, "pair": 1}}] * 2)
+            self.model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss,"pair":pair_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-4, "qreal": 1e-4, "qpred": 1e-2, "pair": 1}}] * 2)
         
         # if self.mode == 1:
         #     self.encoder = Model(query_inputs, state)
@@ -179,8 +179,8 @@ class DSSM_AAE():
 
     def name(self):
         if self.enableSemi:
-            return "dssm_aae0.1_s_%d" % self.limit if not self.enableWasserstein else "dssm_wae_s_%d" % self.limit
-        return "dssm_aae0.1" if not self.enableWasserstein else "dssm_wae"
+            return "dssm_aae_s_%d" % self.limit if not self.enableWasserstein else "dssm_wae_s_%d" % self.limit
+        return "dssm_aae" if not self.enableWasserstein else "dssm_wae"
     
     def word_dropout(self, x, unk_token):
         # np.random.seed(0)
