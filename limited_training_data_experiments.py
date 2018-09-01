@@ -194,6 +194,9 @@ if __name__ == '__main__':
 
 	elif model == "vae":
 		run = VariationalAutoEncoder(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=False, enableCond=False)
+	elif model == "vae_kl":
+		run = VariationalAutoEncoder(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=True)
+
 	elif model == "vae_bi":
 		run = VariationalAutoEncoder(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=False, enableCond=False, enableBi=True, mode=mode)
 	elif model == "vae_max":
@@ -282,6 +285,9 @@ if __name__ == '__main__':
 		y_val = np.zeros((len(q_v_enc_inputs), 2))
 		y_val[:, 0] = 1
 
+		semi_num = len(d_s_enc_inputs)
+		semi_idx = np.arange(semi_num)
+
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))[:100]
 
 
@@ -293,7 +299,7 @@ if __name__ == '__main__':
 
 	may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
 
-	batch_size = 512
+	batch_size = 400
 
 	step = 0
 	# if not isSemiExperiment:
@@ -330,9 +336,9 @@ if __name__ == '__main__':
 	# 				break
 	# else:
 
-	semi_num = len(d_s_enc_inputs)
-	semi_idx = np.arange(semi_num)
+
 	step = 0
+	kl_step = 0
 	t1 = time()
 	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
 		
@@ -340,9 +346,7 @@ if __name__ == '__main__':
 		df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
 		train_num = len(df)
 
-		shuffle(semi_idx)
-		semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
-		semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
+		
 
 		enablePadding = False
 		q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
@@ -358,6 +362,10 @@ if __name__ == '__main__':
 		if "dssm" in model or "binary" in model:
 
 			if isSemiExperiment:
+				shuffle(semi_idx)
+				semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
+				semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
+
 				mat = np.matmul(run.encoder.predict(semi_q_inputs), run.encoder.predict(d_enc_inputs).T)
 				mul = np.argsort(mat)
 				idx = mul[:, -1]
@@ -378,11 +386,24 @@ if __name__ == '__main__':
 				ae_x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
 				y_ = np.expand_dims(q_dec_outputs, axis=-1)
 				real = np.ones((len(y_), 1))
-				fake = np.zeros((len(y_), 1)) if "wae" not in model else -valid
+				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
 				ae_y_train = [y_, real, fake, y_, fake, real]
 
 				loss = run.semi_model.train_on_batch(ae_x_train, ae_y_train)
+		elif model in ["vae", "vae_kl"]:
+			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
+			y_train = np.expand_dims(q_dec_outputs, axis=-1)
 
+			if "kl" in model:
+				kl_weight = kl_anneal_function(anneal_function, kl_step, 0.005, int(3900/2))
+				x_train = x_train + [np.array([kl_weight] * len(x_train[0]))]
+
+		elif model in ["aae", "wae"]:
+			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
+			y_train = np.expand_dims(q_dec_outputs, axis=-1)
+			real = np.ones((len(q_enc_inputs), 1))
+			fake = np.zeros((len(q_enc_inputs), 1)) if "wae" not in model else -real
+			y_train = [y_train, real, fake, y_train, fake, real]
 
 		elif model in ["dssm"]:
 
@@ -391,7 +412,8 @@ if __name__ == '__main__':
 			y_train[:, 0] = 1
 
 
-		loss = run.model.train_on_batch(x_train, y_train)
+		csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+		hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False)
 			
 
 
@@ -400,21 +422,25 @@ if __name__ == '__main__':
 		# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
 
 
-		if step % (batch_size * 100) == 0 and step !=0:
+		if step % (batch_size * 100) == 0:
 
 			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-			val_loss = run.model.test_on_batch(x_val, y_val)
+			# val_loss = run.model.test_on_batch(x_val, y_val)
 			t2 = time()
-			outputs = "%s,%.1fs,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, loss, step, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+			print(loss)
+			outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 			print(outputs)
-			if min_val_loss > val_loss:
-				min_val_loss = val_loss
-			else:
-				break
+
+			output_to_file(model_name, outputs, file_format=".out")
+			# if min_val_loss > val_loss:
+				# min_val_loss = val_loss
+			# else:
+				# break
+			# print(may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 			t1 = time()
 
 		step = step + batch_size
-
+		kl_step = kl_step + 1
 
 
 	# try:

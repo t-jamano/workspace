@@ -69,7 +69,7 @@ class AdversarialAutoEncoderModel():
                                         trainable=True)
 
         self.decoder_lstm = GRU(self.hidden_dim, return_sequences=True, name="dec_gru")
-        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec", use_bias=False, weights=[self.embedding_matrix.T])
 
         rec_outputs = self.decoder_dense(self.decoder_lstm(decoder_embedding(decoder_inputs), initial_state=self.latent2hidden(state_z)))
 
@@ -123,9 +123,9 @@ class AdversarialAutoEncoderModel():
         return Model(inputs, outputs)
 
     def sampling(self, args):
-            z_mean, z_log_var = args
-            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
-                                      stddev=1)
-            return z_mean + K.exp(z_log_var / 2) * epsilon
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                  stddev=1)
+        return z_mean + K.exp(z_log_var / 2) * epsilon
 
 

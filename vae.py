@@ -57,7 +57,7 @@ class VariationalAutoEncoder():
         self.latent2hidden = Dense(self.hidden_dim)
         self.decoder_lstm = GRU(self.hidden_dim, return_sequences=True, name="dec_gru")
 
-        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="q_rec")
+        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="q_rec", use_bias=False, weights=[self.embedding_matrix.T], trainable=False)
 
         dec_embedding = Embedding(self.nb_words,
                                         self.embedding_matrix.shape[-1],
@@ -107,7 +107,7 @@ class VariationalAutoEncoder():
     def vae_loss(self, x, x_decoded_onehot):
         xent_loss = objectives.sparse_categorical_crossentropy(x, x_decoded_onehot) if not self.enableSample else objectives.categorical_crossentropy(x, x_decoded_onehot)
         kl_loss = - 0.5 * K.mean(1 + self.state_var - K.square(self.state_mean) - K.exp(self.state_var))
-        loss = K.mean(xent_loss + kl_loss) if not self.enableKL else xent_loss + (self.kl_inputs * kl_loss)
+        loss = xent_loss + kl_loss if not self.enableKL else xent_loss + (self.kl_inputs * kl_loss)
         return loss
 
     def neg_vae_loss(self, x, x_decoded_onehot):
