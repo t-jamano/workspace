@@ -390,8 +390,8 @@ if __name__ == '__main__':
 			y_train[:, 0] = 1
 
 			if model == "dssm_aae_s":
-				ae_x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
-				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				ae_x_train = [d_enc_inputs[idx], run.word_dropout(d_dec_inputs[idx], bpe_dict['<drop>'])]
+				y_ = np.expand_dims(d_dec_outputs[idx], axis=-1)
 				real = np.ones((len(y_), 1))
 				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
 				ae_y_train = [y_, real, fake, y_, fake, real]
