@@ -412,38 +412,35 @@ if __name__ == '__main__':
 			y_train = np.zeros((train_num, 2))
 			y_train[:, 0] = 1
 
+		try:
+			csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
+			hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False, nb_epoch=1, callbacks=[csv_logger])
+				
 
-		csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
-		hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False, nb_epoch=1, callbacks=[csv_logger])
-			
+			if step % (batch_size * 100) == 0 and step != 0 :
 
+				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
+				# val_loss = run.model.test_on_batch(x_val, y_val)
+				loss = hist.history['loss'][-1]
+				t2 = time()
+				outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				print(outputs)
 
-		# else:
-		# 	csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
-		# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
+				output_to_file(model_name, outputs, file_format=".res")
+				# if min_val_loss > val_loss:
+					# min_val_loss = val_loss
+				# else:
+					# break
+				# print(may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				if max_july < july_auc:
+					max_july = july_auc
+					run.encoder.save('/work/data/logs/new/%s.encoder.h5' % (model_name), overwrite=True)
 
-
-		if step % (batch_size * 100) == 0 and step != 0 :
-
-			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
-			# val_loss = run.model.test_on_batch(x_val, y_val)
-			loss = hist.history['loss'][-1]
-			t2 = time()
-			outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
-			print(outputs)
-
-			output_to_file(model_name, outputs, file_format=".res")
-			# if min_val_loss > val_loss:
-				# min_val_loss = val_loss
-			# else:
-				# break
-			# print(may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
-			if max_july < july_auc:
-				max_july = july_auc
-				run.encoder.save('/work/data/logs/new/%s.encoder.h5' % (model_name), overwrite=True)
-
-			t1 = time()
-
+				t1 = time()
+				
+		except Exception as e:
+			print(e)
+			pass
 			
 
 		step = step + batch_size

@@ -95,7 +95,8 @@ class AdversarialAutoEncoderModel():
             return "aae_s2s" if not self.enableWasserstein else "wae_s2s"
         if self.enableSeparate:
             return "aae2" if not self.enableWasserstein else "wae2"
-        return "aae_s2s" if not self.enableWasserstein else "wae"
+            
+        return "aae" if not self.enableWasserstein else "wae"
     
     def word_dropout(self, x, unk_token):
         # np.random.seed(0)
