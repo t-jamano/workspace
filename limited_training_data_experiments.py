@@ -223,6 +223,8 @@ if __name__ == '__main__':
 		run = DSSM_VAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, mode=mode, enableGRU=False)
 	elif model == "dssm_aae":
 		run = DSSM_AAE(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, mode=mode)
+	elif model == "dssm_aae_ss":
+		run = DSSM_AAE_SS(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, mode=mode)
 	elif model == "dssm_vae_pr":
 		run = DSSM_VAE_PR(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, mode=mode)
 	elif model == "dssm_vae2":
@@ -235,10 +237,10 @@ if __name__ == '__main__':
 	run.encoder._make_predict_function()
 	graph = tf.get_default_graph()
 
-	limit = limit if model in ["dssm_s", "dssm_aae_s"] else 1
+	limit = limit if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"] else 1
 	model_name = "%s_m%d_%s_limit%d_%s" % (run.name(), mode, train_data, limit, date_time)
 
-	isSemiExperiment = True if model in ["dssm_aae_s", "dssm_s"] else False
+	isSemiExperiment = True if model in ["dssm_aae_s", "dssm_s", "dssm_aae_ss"] else False
 
 	# =================================== Get testing data ==============================================
 	test_set = []
@@ -273,8 +275,8 @@ if __name__ == '__main__':
 		q_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.q.npy' % (path, limit))
 		d_s_enc_inputs = np.load('%sdata/train_data/%d_QQ_ml15.d.npy' % (path, limit))
 
-		q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))[:limit]
-		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:limit]
+		q_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.q.v.npy' % (path))[:2560]
+		d_v_enc_inputs = np.load('%sdata/train_data/50K_QQ_ml15.d.v.npy' % (path))[:2560]
 
 		semi_num = limit
 
@@ -299,7 +301,7 @@ if __name__ == '__main__':
 
 	may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = 0, 0, 0, 0, 0, 0
 
-	batch_size = 400
+	batch_size = 256
 
 	step = 0
 	# if not isSemiExperiment:
@@ -340,6 +342,7 @@ if __name__ == '__main__':
 	step = 0
 	kl_step = 0
 	max_july = 0
+	semi_step = 0
 	t1 = time()
 	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
 		
@@ -363,9 +366,12 @@ if __name__ == '__main__':
 		if "dssm" in model or "binary" in model:
 
 			if isSemiExperiment:
-				shuffle(semi_idx)
-				semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
-				semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
+				# logs/val/
+				# shuffle(semi_idx)
+				# semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
+				# semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
+				semi_q_inputs = q_s_enc_inputs[semi_step: semi_step + train_num]
+				semi_d_inputs = d_s_enc_inputs[semi_step: semi_step + train_num]
 
 				mat = np.matmul(run.encoder.predict(semi_q_inputs), run.encoder.predict(d_enc_inputs).T)
 				mul = np.argsort(mat)
@@ -378,7 +384,7 @@ if __name__ == '__main__':
 					idx.append(mul[j][-1] if mul[j][-1] != j else mul[j][-2])
 
 
-		if model in ["dssm_s", "dssm_aae_s"]:
+		if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"]:
 			x_train = [semi_q_inputs, semi_d_inputs, d_enc_inputs[idx]]
 			y_train = np.zeros((train_num, 2))
 			y_train[:, 0] = 1
@@ -391,6 +397,13 @@ if __name__ == '__main__':
 				ae_y_train = [y_, real, fake, y_, fake, real]
 
 				loss = run.semi_model.train_on_batch(ae_x_train, ae_y_train)
+
+			elif model == "dssm_aae_ss":
+				x_train = x_train + [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
+				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				real = np.ones((len(y_), 1))
+				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
+				y_train = [y_, y_train, real, fake, y_, y_train, fake, real]
 
 		elif model in ["vae", "vae_kl"]:
 			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
@@ -409,6 +422,10 @@ if __name__ == '__main__':
 			fake = np.zeros((len(q_enc_inputs), 1)) if "wae" not in model else -real
 			y_train = [y_train, real, fake, y_train, fake, real]
 
+		elif model in ["s2s"]:
+			x_train = [q_enc_inputs, run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
+			y_train = np.expand_dims(d_dec_outputs, axis=-1)
+
 		elif model in ["dssm", "dssm_aae"]:
 
 			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
@@ -417,41 +434,58 @@ if __name__ == '__main__':
 
 			if model in ["dssm_aae"]:
 
-				x_train = x_train + [run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
-				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				x_train = x_train + [run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
+				y_ = np.expand_dims(d_dec_outputs, axis=-1)
 				real = np.ones((len(y_), 1))
 				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
 				y_train = [y_, y_train, real, fake, y_, y_train, fake, real]
 
 
 		try:
-			csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
+			csv_logger = CSVLogger('/work/data/logs/new/all/%s.model.csv' % model_name, append=True, separator=';')
 			hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False, nb_epoch=1, callbacks=[csv_logger])
 				
 
-			if step % (batch_size * 100) == 0 and step != 0 :
+
+			condition = step % limit == 0 if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"] else step % (batch_size * 100) == 0
+			
+			if condition and step != 0 :
 
 				may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
 				# val_loss = run.model.test_on_batch(x_val, y_val)
 				loss = hist.history['loss'][-1]
-				t2 = time()
-				outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"]:
+					if model == "dssm_aae_ss":
+						val_loss = run.dssm.evaluate(x_val, y_val, batch_size=train_num, verbose=0)
+					else:
+						val_loss = run.model.evaluate(x_val, y_val, batch_size=train_num, verbose=0)
+					t2 = time()
+					outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (run.name(), t2-t1, step, loss, val_loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				else:
+					t2 = time()
+					outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (run.name(), t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+					
+
 				# print(hist.history)
 				print(outputs)
 
 				output_to_file(model_name, outputs, file_format=".res")
-				# if min_val_loss > val_loss:
-					# min_val_loss = val_loss
-				# else:
-					# break
+
+				
 				# print(may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 				if max_july < july_auc:
 					max_july = july_auc
-					run.encoder.save('/work/data/logs/new/%s.encoder.h5' % (model_name), overwrite=True)
+					run.encoder.save('/work/data/logs/new/all/%s.encoder.h5' % (model_name), overwrite=True)
 
 				t1 = time()
 
-				if model in ["dssm_s", "dssm_aae_s"] and (step / limit) >= 100:
+				if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"]:
+					if min_val_loss > val_loss:
+						min_val_loss = val_loss
+					else:
+						break
+
+				if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"] and (step / limit) >= 100:
 					break
 
 		except Exception as e:
@@ -463,6 +497,7 @@ if __name__ == '__main__':
 			
 
 		step = step + batch_size
+		semi_step = semi_step + batch_size if semi_step < limit - batch_size else 0
 		kl_step = kl_step + 1
 
 
@@ -487,7 +522,7 @@ if __name__ == '__main__':
 	# 		x_train = [q_enc_inputs, run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 	# 		y_train = [np.expand_dims(d_dec_outputs, axis=-1)]
 
-	# 	csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
+	# 	csv_logger = CSVLogger('/work/data/logs/new/all/%s.model.csv' % model_name, append=True, separator=';')
 	# 	hist = run.model.fit(x_train, y_train,
  #                        shuffle=True,
  #                        epochs=100,
@@ -560,13 +595,13 @@ if __name__ == '__main__':
 				
 	# 		x_train = [q_enc_inputs, d_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>']), run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 	# 		y_train = [np.expand_dims(q_dec_outputs, axis=-1), np.expand_dims(d_dec_outputs, axis=-1)]
-	# 		csv_logger = CSVLogger('/work/data/logs/new/%s.ae.csv' % model_name, append=True, separator=';')
+	# 		csv_logger = CSVLogger('/work/data/logs/new/all/%s.ae.csv' % model_name, append=True, separator=';')
 	# 		hist = run.ae.fit(x_train, y_train, shuffle=False, epochs=1, verbose=1, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(), csv_logger])
 
 	# 		x_train = [q_enc_inputs[:limit], d_enc_inputs[:limit], d_enc_inputs[idx][:limit]]
 	# 		y_train = [pair_labels[:limit]]
 
-	# 		csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
+	# 		csv_logger = CSVLogger('/work/data/logs/new/all/%s.model.csv' % model_name, append=True, separator=';')
 	# 		hist = run.model.fit(x_train, y_train, shuffle=False, epochs=100, verbose=1, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(), csv_logger])
 
 	# 		if max_val_loss > hist.history['val_loss'][-1]:
