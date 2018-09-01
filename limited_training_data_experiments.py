@@ -349,9 +349,10 @@ if __name__ == '__main__':
 		df = df.dropna()
 		df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
 		train_num = len(df)
-
 		
-
+		if train_num < batch_size:
+			continue
+	
 		enablePadding = False
 		q_df = parse_texts_bpe(df.q.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
 		d_df = parse_texts_bpe(df.d.tolist(), sp, bpe_dict, max_len, enablePadding, "post")
@@ -366,7 +367,6 @@ if __name__ == '__main__':
 		if "dssm" in model or "binary" in model:
 
 			if isSemiExperiment:
-				# logs/val/
 				# shuffle(semi_idx)
 				# semi_q_inputs = q_s_enc_inputs[semi_idx][:train_num]
 				# semi_d_inputs = d_s_enc_inputs[semi_idx][:train_num]
@@ -445,8 +445,6 @@ if __name__ == '__main__':
 			csv_logger = CSVLogger('/work/data/logs/new/all/%s.model.csv' % model_name, append=True, separator=';')
 			hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False, nb_epoch=1, callbacks=[csv_logger])
 				
-
-
 			condition = step % limit == 0 if model in ["dssm_s", "dssm_aae_s", "dssm_aae_ss"] else step % (batch_size * 100) == 0
 			
 			if condition and step != 0 :
@@ -499,6 +497,10 @@ if __name__ == '__main__':
 		step = step + batch_size
 		semi_step = semi_step + batch_size if semi_step < limit - batch_size else 0
 		kl_step = kl_step + 1
+
+
+
+
 
 
 
