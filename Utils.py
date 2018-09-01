@@ -399,7 +399,7 @@ def generate_reconstruct_query(model, bpe, x, idx=None):
         results.append("%s\t%s" % (real_x, gen_x))
 
 def output_to_file(model_name, file_output, file_format=".out"):
-    with open("/work/data/logs/%s%s" % (model_name, file_format), "a") as myfile:
+    with open("/work/data/logs/new/%s%s" % (model_name, file_format), "a") as myfile:
         myfile.write(file_output+"\n")
 
 def write_to_files(run, print_output, file_output, path, model_name, model, save=False):

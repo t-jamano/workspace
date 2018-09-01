@@ -339,6 +339,7 @@ if __name__ == '__main__':
 
 	step = 0
 	kl_step = 0
+	max_july = 0
 	t1 = time()
 	for df in pd.read_csv("/data/t-mipha/agi_encoder_recipe/datasets/query_logs/CLICKED_QQ_MUL_2017-01-01_2017-06-10_r_train_ASCIIonly.txt", iterator=True, chunksize=batch_size, sep="\t", header=None, names=['q', 'd', 'label', 'feature', 'null']):
 		
@@ -412,36 +413,41 @@ if __name__ == '__main__':
 			y_train[:, 0] = 1
 
 
-		csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
-		hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False)
+		csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
+		hist = run.model.fit(x_train, y_train, batch_size=train_num, verbose=0, shuffle=False, nb_epoch=1, callbacks=[csv_logger])
 			
 
 
 		# else:
-		# 	csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+		# 	csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
 		# 	hist = run.model.fit(x_train, y_train, validation_data=(),verbose=0, batch_size=batch_size, nb_epoch=1, shuffle=True, callbacks=[csv_logger])
 
 
-		if step % (batch_size * 100) == 0:
+		if step % (batch_size * 100) == 0 and step != 0 :
 
 			may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc = evaluate(run.encoder, test_set)
 			# val_loss = run.model.test_on_batch(x_val, y_val)
+			loss = hist.history['loss'][-1]
 			t2 = time()
-			print(loss)
-			outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+			outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
 			print(outputs)
 
-			output_to_file(model_name, outputs, file_format=".out")
+			output_to_file(model_name, outputs, file_format=".res")
 			# if min_val_loss > val_loss:
 				# min_val_loss = val_loss
 			# else:
 				# break
 			# print(may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+			if max_july < july_auc:
+				max_july = july_auc
+				run.encoder.save('/work/data/logs/new/%s.encoder.h5' % (model_name), overwrite=True)
+
 			t1 = time()
+
+			
 
 		step = step + batch_size
 		kl_step = kl_step + 1
-
 
 	# try:
 			
@@ -463,7 +469,7 @@ if __name__ == '__main__':
 	# 		x_train = [q_enc_inputs, run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 	# 		y_train = [np.expand_dims(d_dec_outputs, axis=-1)]
 
-	# 	csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+	# 	csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
 	# 	hist = run.model.fit(x_train, y_train,
  #                        shuffle=True,
  #                        epochs=100,
@@ -536,13 +542,13 @@ if __name__ == '__main__':
 				
 	# 		x_train = [q_enc_inputs, d_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>']), run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 	# 		y_train = [np.expand_dims(q_dec_outputs, axis=-1), np.expand_dims(d_dec_outputs, axis=-1)]
-	# 		csv_logger = CSVLogger('/work/data/logs/%s.ae.csv' % model_name, append=True, separator=';')
+	# 		csv_logger = CSVLogger('/work/data/logs/new/%s.ae.csv' % model_name, append=True, separator=';')
 	# 		hist = run.ae.fit(x_train, y_train, shuffle=False, epochs=1, verbose=1, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(), csv_logger])
 
 	# 		x_train = [q_enc_inputs[:limit], d_enc_inputs[:limit], d_enc_inputs[idx][:limit]]
 	# 		y_train = [pair_labels[:limit]]
 
-	# 		csv_logger = CSVLogger('/work/data/logs/%s.model.csv' % model_name, append=True, separator=';')
+	# 		csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
 	# 		hist = run.model.fit(x_train, y_train, shuffle=False, epochs=100, verbose=1, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(), csv_logger])
 
 	# 		if max_val_loss > hist.history['val_loss'][-1]:
