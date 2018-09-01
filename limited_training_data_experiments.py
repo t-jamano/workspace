@@ -391,6 +391,7 @@ if __name__ == '__main__':
 				ae_y_train = [y_, real, fake, y_, fake, real]
 
 				loss = run.semi_model.train_on_batch(ae_x_train, ae_y_train)
+
 		elif model in ["vae", "vae_kl"]:
 			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
 			y_train = np.expand_dims(q_dec_outputs, axis=-1)
@@ -398,6 +399,8 @@ if __name__ == '__main__':
 			if "kl" in model:
 				kl_weight = kl_anneal_function(anneal_function, kl_step, 0.005, int(3900/2))
 				x_train = x_train + [np.array([kl_weight] * len(x_train[0]))]
+				# x_train = x_train + [np.array([0] * len(x_train[0]))]
+
 
 		elif model in ["aae", "wae"]:
 			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
@@ -406,11 +409,20 @@ if __name__ == '__main__':
 			fake = np.zeros((len(q_enc_inputs), 1)) if "wae" not in model else -real
 			y_train = [y_train, real, fake, y_train, fake, real]
 
-		elif model in ["dssm"]:
+		elif model in ["dssm", "dssm_aae"]:
 
 			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
 			y_train = np.zeros((train_num, 2))
 			y_train[:, 0] = 1
+
+			if model in ["dssm_aae"]:
+
+				x_train = x_train + [run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
+				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				real = np.ones((len(y_), 1))
+				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
+				y_train = [y_, y_train, real, fake, y_, y_train, fake, real]
+
 
 		try:
 			csv_logger = CSVLogger('/work/data/logs/new/%s.model.csv' % model_name, append=True, separator=';')
@@ -424,6 +436,7 @@ if __name__ == '__main__':
 				loss = hist.history['loss'][-1]
 				t2 = time()
 				outputs = "%s,%.1fs,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f" % (model, t2-t1, step, loss, may_ndcg, june_ndcg, july_auc, quora_auc, para_auc, sts_pcc)
+				# print(hist.history)
 				print(outputs)
 
 				output_to_file(model_name, outputs, file_format=".res")
@@ -437,7 +450,7 @@ if __name__ == '__main__':
 					run.encoder.save('/work/data/logs/new/%s.encoder.h5' % (model_name), overwrite=True)
 
 				t1 = time()
-				
+
 		except Exception as e:
 			print(e)
 			pass

@@ -123,7 +123,7 @@ class DSSM_AAE():
 
         self.latent2hidden = Dense(self.hidden_dim)
         self.decoder_lstm = GRU(self.hidden_dim, return_sequences=True, name="dec_gru")
-        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec")
+        self.decoder_dense = Dense(self.nb_words, activation='softmax', name="rec", use_bias=False, weights=[self.embedding_matrix.T])
 
         # self.doc_latent2hidden = Dense(self.hidden_dim)
         # self.doc_decoder_lstm = GRU(self.hidden_dim, return_sequences=True, name="dec_gru2")
