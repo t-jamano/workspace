@@ -249,7 +249,7 @@ class DSSM_AAE_SS():
     def build(self):
 
         query_inputs = Input(shape=(self.max_len,))
-        query_inputs2 = Input(shape=(self.max_len,))
+        # query_inputs2 = Input(shape=(self.max_len,))
         doc_inputs = Input(shape=(self.max_len,))
         neg_doc_inputs = Input(shape=(self.max_len,))
 
@@ -275,7 +275,7 @@ class DSSM_AAE_SS():
         doc_state = dense(GlobalMaxPooling1D()(doc_encoder_lstm(doc_encoder_embedding(doc_inputs))))
         neg_doc_state = dense(GlobalMaxPooling1D()(doc_encoder_lstm(doc_encoder_embedding(neg_doc_inputs))))
 
-        state2 = dense(GlobalMaxPooling1D()(encoder_lstm(encoder_embedding(query_inputs2))))
+        # state2 = dense(GlobalMaxPooling1D()(encoder_lstm(encoder_embedding(query_inputs2))))
 
 
 
@@ -283,8 +283,8 @@ class DSSM_AAE_SS():
         self.var = Dense(self.latent_dim)
 
 
-        self.state_mean = self.mean(state2)
-        self.state_var = self.var(state2)
+        self.state_mean = self.mean(neg_doc_state)
+        self.state_var = self.var(neg_doc_state)
 
         state_z = Lambda(self.sampling)([self.state_mean, self.state_var])
 
@@ -354,7 +354,7 @@ class DSSM_AAE_SS():
 
         # self.ae = Model([query_inputs, doc_inputs, neg_doc_inputs, decoder_inputs, pos_doc_decoder_inputs, neg_doc_decoder_inputs], [rec_outputs, pos_doc_rec_outputs, neg_doc_rec_outputs, pairwise_pred])
 
-        self.ae = Model([query_inputs, doc_inputs, neg_doc_inputs, query_inputs2, decoder_inputs], [rec_outputs, pairwise_pred])
+        self.ae = Model([query_inputs, doc_inputs, neg_doc_inputs, decoder_inputs], [rec_outputs, pairwise_pred])
 
         inputs = self.ae.inputs
         # outputs = fix_names([rec_outputs, pos_doc_rec_outputs, neg_doc_rec_outputs, pairwise_pred, query_fake, query_real, pos_doc_fake, pos_doc_real, neg_doc_fake, neg_doc_real], ["qpred","dpred","ndpred","pair","qfake","qreal","dfake","dreal","ndfake","ndreal"])
@@ -368,7 +368,7 @@ class DSSM_AAE_SS():
         self.model = AdversarialModel(base_model=self.aae, player_params=[generative_params, discriminative_params], player_names=["generator", "discriminator"])        
         rec_loss = "sparse_categorical_crossentropy"
         pair_loss = "categorical_crossentropy"
-        self.model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss,"pair":pair_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-4, "qreal": 1e-4, "qpred": 1e-2, "pair": 1}}] * 2)
+        self.model.adversarial_compile(adversarial_optimizer=self.adversarial_optimizer, player_optimizers=[self.optimizer, self.optimizer], loss={"qfake": self.dis_loss, "qreal": self.dis_loss, "qpred": rec_loss,"pair":pair_loss}, player_compile_kwargs=[{"loss_weights": {"qfake": 1e-4, "qreal": 1e-4, "qpred": 1e-1, "pair": 1}}] * 2)
         
         self.encoder = Model(query_inputs, state)
         self.dssm = Model([query_inputs, doc_inputs, neg_doc_inputs], [pairwise_pred])

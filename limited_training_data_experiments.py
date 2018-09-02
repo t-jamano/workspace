@@ -126,6 +126,7 @@ if __name__ == '__main__':
 		# optimizer = Adam(clipvalue=5)
 		# optimizer = Adam(0.0002, 0.5)
 		optimizer = Adam()
+		# optimizer = Adadelta(lr=2.)
 
 
 	# load pre-trained tokeniser
@@ -180,6 +181,13 @@ if __name__ == '__main__':
 			# for layer, layer2 in zip(["d_embedding_layer", "d_gru"], ["q_embedding_layer", "q_gru"]):
 			# 	run.model.get_layer(layer).set_weights(pre_model.get_layer(layer2).get_weights())
 
+	elif model == "clf_bpe":
+		run = DSSMClassifier(200, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
+	elif model == "clf_aae":
+		run = DSSMClassifier(100, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
+	elif model == "clf_bpe_aae":
+		run = DSSMClassifier(300, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
+
 	elif model == "binary":
 		run = BinaryClassifier(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True)
 
@@ -194,6 +202,8 @@ if __name__ == '__main__':
 
 	elif model == "vae":
 		run = VariationalAutoEncoder(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=False, enableCond=False)
+	elif model == "vae_bow":
+		run = VariationalAutoEncoderBOW(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=False, enableCond=False)
 	elif model == "vae_kl":
 		run = VariationalAutoEncoder(nb_words, max_len, embedding_matrix, [hidden_dim, latent_dim], optimizer, enableKL=True)
 
@@ -290,6 +300,8 @@ if __name__ == '__main__':
 		semi_num = len(d_s_enc_inputs)
 		semi_idx = np.arange(semi_num)
 
+		# print(q_s_enc_inputs.shape, d_s_enc_inputs.shape)
+
 	# labels = np.load('%sdata/train_data/%s.label.npy' % (path,train_data))[:100]
 
 
@@ -349,7 +361,7 @@ if __name__ == '__main__':
 		df = df.dropna()
 		df.d = [i.split("<sep>")[0] for i in df.d.tolist()]
 		train_num = len(df)
-		
+
 		if train_num < batch_size:
 			continue
 	
@@ -399,8 +411,8 @@ if __name__ == '__main__':
 				loss = run.semi_model.train_on_batch(ae_x_train, ae_y_train)
 
 			elif model == "dssm_aae_ss":
-				x_train = x_train + [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]
-				y_ = np.expand_dims(q_dec_outputs, axis=-1)
+				x_train = x_train + [run.word_dropout(d_dec_inputs[idx], bpe_dict['<drop>'])]
+				y_ = np.expand_dims(d_dec_outputs[idx], axis=-1)
 				real = np.ones((len(y_), 1))
 				fake = np.zeros((len(y_), 1)) if "wae" not in model else -real
 				y_train = [y_, y_train, real, fake, y_, y_train, fake, real]
@@ -414,6 +426,9 @@ if __name__ == '__main__':
 				x_train = x_train + [np.array([kl_weight] * len(x_train[0]))]
 				# x_train = x_train + [np.array([0] * len(x_train[0]))]
 
+		elif model in ["vae_bow"]:
+			x_train = q_enc_inputs
+			y_train = toBOW(q_enc_inputs, nb_words)
 
 		elif model in ["aae", "wae"]:
 			x_train = [q_enc_inputs, run.word_dropout(q_dec_inputs, bpe_dict['<drop>'])]

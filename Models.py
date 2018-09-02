@@ -183,7 +183,7 @@ class Dense_tied(Dense):
 
     def call(self, x, mask=None):
         # Use tied weights
-        self.kernel = K.transpose(self.tied_to.kernel)
+        self.kernel = K.transpose(self.tied_to.embeddings)
         output = K.dot(x, self.kernel)
         if self.use_bias:
             output += self.bias
@@ -1018,6 +1018,56 @@ class DSSM():
             return "dssm_gru2" if self.enableSeparate else "dssm_gru"
         else:
             return "dssm2_%s" % self.PoolMode if self.enableSeparate else "dssm_%s" % self.PoolMode
+
+class DSSMClassifier():
+    
+    def __init__(self, input_dim=200,hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, optimizer=None):
+
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        self.num_negatives = num_negatives
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.input_dim = input_dim
+
+        # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
+        # The first dimension is None because the queries and documents can vary in length.
+        query = Input(shape = (self.input_dim,))
+        pos_doc = Input(shape = (self.input_dim,))
+        neg_docs = [Input(shape = (self.input_dim,)) for j in range(self.num_negatives)]
+
+        dense1 = Dense(hidden_dim, activation="tanh", name="q_dense1")
+        dense2 = Dense(latent_dim, activation="tanh", name="q_dense2")
+
+
+
+
+        query_sem = dense2(dense1(query))
+        pos_doc_sem = dense2(dense1(pos_doc))
+        neg_doc_sems = [dense2(dense1(neg_doc)) for neg_doc in neg_docs] 
+
+        R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
+        R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
+
+        concat_Rs = concatenate([R_Q_D_p] + R_Q_D_ns)
+        concat_Rs = Reshape((self.num_negatives + 1, 1))(concat_Rs)
+
+        weight = np.array([1]).reshape(1, 1, 1)
+        with_gamma = Convolution1D(1, 1, padding = "same", input_shape = (self.num_negatives + 1, 1), activation = "linear", use_bias = False, weights = [weight])(concat_Rs) # See equation (5).
+        with_gamma = Reshape((self.num_negatives + 1, ))(with_gamma)
+
+        # Finally, we use the softmax function to calculate P(D+|Q).
+        prob = Activation("softmax")(with_gamma) # See equation (5).
+
+        # We now have everything we need to define our model.
+        self.model = Model(inputs = [query, pos_doc] + neg_docs, outputs = prob)
+        self.model.compile(optimizer = optimizer, loss = "categorical_crossentropy")
+
+        self.encoder = Model(inputs=query, outputs=query_sem)
+        # self.model.summary()
+
+    def name(self):
+        return "clf_%d" % self. hidden_dim 
 
 
 class AAE():

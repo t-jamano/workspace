@@ -146,6 +146,84 @@ class VariationalAutoEncoder():
                                       stddev=1)
             return z_mean + K.exp(z_log_var / 2) * epsilon
 
+class VariationalAutoEncoderBOW():
+    
+    def __init__(self, nb_words, max_len, embedding_matrix, dim, optimizer=Adam(), kl_rate=0.01, keep_rate_word_dropout=0.5, enableKL=True, enableCond=False, mode=1, enableGRU=True, enableSample=False, enablePair=False):
+
+        self.dim = dim
+        self.nb_words = nb_words
+        self.max_len = max_len
+        self.embedding_matrix = embedding_matrix
+        self.optimizer = optimizer
+        self.keep_rate_word_dropout = keep_rate_word_dropout
+        self.kl_rate = kl_rate
+        self.enableKL = enableKL
+        self.enableCond = enableCond
+        self.num_negatives = 1
+        self.hidden_dim = self.dim[0]
+        self.latent_dim = self.dim[1]
+        self.mode = mode
+        self.enableGRU = enableGRU
+        self.enableSample = enableSample
+        self.enablePair = enablePair
+        self.build()
+
+    def build(self):
+
+        query_inputs = Input(shape=(self.max_len,))
+
+        self.kl_inputs = Input(shape=(1,))
+
+        encoder_embedding = Embedding(self.nb_words,
+                                        self.embedding_matrix.shape[-1],
+                                        weights=[self.embedding_matrix],
+                                        input_length=self.max_len,
+                                        mask_zero=False if self.enableGRU else False,
+                                        name="q_embedding",
+                                        trainable=True)
+
+        encoder_lstm = Bidirectional(GRU(self.hidden_dim, return_sequences=True), name='q_gru') if self.enableGRU else GlobalMaxPooling1D()
+        dense = Dense(self.latent_dim, activation="tanh", name="q_dense")
+
+        state = dense(GlobalMaxPooling1D()(encoder_lstm(encoder_embedding(query_inputs))))
+
+
+        self.mean = Dense(self.latent_dim)
+        self.var = Dense(self.latent_dim)
+
+        self.state_mean = self.mean(state)
+        self.state_var = self.var(state)
+
+
+        self.state_z = Lambda(self.sampling)([self.state_mean, self.state_var])
+
+        self.latent2hidden = Dense(self.hidden_dim, activation="tanh")
+        
+        self.decoder_dense = Dense(self.nb_words, activation='sigmoid', name="q_rec", use_bias=False, weights=[self.embedding_matrix.T], trainable=True)
+        # self.decoder_dense = Dense_tied(self.nb_words, activation='sigmoid', tied_to=encoder_embedding)
+
+        rec_outputs = self.decoder_dense(self.latent2hidden(self.state_z))
+        inputs = [query_inputs] 
+        outputs = [rec_outputs]
+
+        self.model = Model(inputs, outputs)
+        self.model.compile(optimizer=self.optimizer, loss=[self.vae_loss])    
+        self.encoder = Model(query_inputs, self.state_mean)
+
+    def vae_loss(self, x, x_decoded_mean):
+        xent_loss =  K.mean(K.binary_crossentropy(x_decoded_mean, x), axis=-1)
+        kl_loss = - 0.5 * K.mean(1 + self.state_var - K.square(self.state_mean) - K.exp(self.state_var), axis=-1)
+        return xent_loss + kl_loss
+
+
+    def name(self):
+        return "vae_bow"
+    
+    def sampling(self, args):
+            z_mean, z_log_var = args
+            epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.,\
+                                      stddev=1)
+            return z_mean + K.exp(z_log_var / 2) * epsilon
 
 class KATE():
     
