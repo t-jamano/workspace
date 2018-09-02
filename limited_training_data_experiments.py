@@ -181,12 +181,26 @@ if __name__ == '__main__':
 			# for layer, layer2 in zip(["d_embedding_layer", "d_gru"], ["q_embedding_layer", "q_gru"]):
 			# 	run.model.get_layer(layer).set_weights(pre_model.get_layer(layer2).get_weights())
 
-	elif model == "clf_bpe":
-		run = DSSMClassifier(200, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
-	elif model == "clf_aae":
-		run = DSSMClassifier(100, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
-	elif model == "clf_bpe_aae":
-		run = DSSMClassifier(300, hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer)
+	elif model == "dssm_bpe":
+		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe")
+
+	elif model == "dssm_ae":
+		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae")
+		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
+		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5", custom_objects={"KCompetitive": KCompetitive})
+		for layer in ["q_embedding", "q_gru", "q_dense"]:
+				run.model.get_layer(layer).set_weights(pre_ae.get_layer(layer).get_weights())
+
+	elif model == "dssm_bpe_ae":
+		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe_ae")
+		# pre_ae = load_model("/work/data/logs/new/vae_kl_m1_200M_QQ_ml15_limit1_2018_09_01_02:31:47.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
+		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5")
+		for layer in ["q_embedding", "q_gru", "q_dense"]:
+				run.model.get_layer(layer).set_weights(pre_ae.get_layer(layer).get_weights())
+
+
+				
 
 	elif model == "binary":
 		run = BinaryClassifier(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True)
@@ -441,7 +455,7 @@ if __name__ == '__main__':
 			x_train = [q_enc_inputs, run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 			y_train = np.expand_dims(d_dec_outputs, axis=-1)
 
-		elif model in ["dssm", "dssm_aae"]:
+		elif model in ["dssm", "dssm_aae", "dssm_bpe", "dssm_bpe_ae", "dssm_ae"]:
 
 			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
 			y_train = np.zeros((train_num, 2))

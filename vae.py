@@ -194,11 +194,13 @@ class VariationalAutoEncoderBOW():
         self.state_mean = self.mean(state)
         self.state_var = self.var(state)
 
+        self.state_mean = KCompetitive(2, "kcomp")(self.state_mean)
+
 
         self.state_z = Lambda(self.sampling)([self.state_mean, self.state_var])
 
         self.latent2hidden = Dense(self.hidden_dim, activation="tanh")
-        
+
         self.decoder_dense = Dense(self.nb_words, activation='sigmoid', name="q_rec", use_bias=False, weights=[self.embedding_matrix.T], trainable=True)
         # self.decoder_dense = Dense_tied(self.nb_words, activation='sigmoid', tied_to=encoder_embedding)
 
@@ -217,7 +219,7 @@ class VariationalAutoEncoderBOW():
 
 
     def name(self):
-        return "vae_bow"
+        return "kate_bow"
     
     def sampling(self, args):
             z_mean, z_log_var = args

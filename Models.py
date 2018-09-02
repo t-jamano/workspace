@@ -1021,30 +1021,69 @@ class DSSM():
 
 class DSSMClassifier():
     
-    def __init__(self, input_dim=200,hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, optimizer=None):
+    def __init__(self, hidden_dim=300, latent_dim=128, num_negatives=1, nb_words=50005, max_len=10, embedding_matrix=None, optimizer=None, mode="bpe"):
+
 
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
         self.num_negatives = num_negatives
         self.nb_words = nb_words
         self.max_len = max_len
-        self.input_dim = input_dim
+        self.mode = mode
 
-        # Input tensors holding the query, positive (clicked) document, and negative (unclicked) documents.
-        # The first dimension is None because the queries and documents can vary in length.
-        query = Input(shape = (self.input_dim,))
-        pos_doc = Input(shape = (self.input_dim,))
-        neg_docs = [Input(shape = (self.input_dim,)) for j in range(self.num_negatives)]
+        query = Input(shape = (self.max_len,))
+        pos_doc = Input(shape = (self.max_len,))
+        neg_docs = [Input(shape = (self.max_len,)) for j in range(self.num_negatives)]
+
+        ae_embed_layer = Embedding(nb_words,
+            embedding_matrix.shape[-1],
+            weights=[embedding_matrix],
+            input_length=max_len,
+            name="q_embedding",
+            trainable=False) if "ae" in mode else None
+
+        bpe_embed_layer = Embedding(nb_words,
+            embedding_matrix.shape[-1],
+            weights=[embedding_matrix],
+            input_length=max_len,
+            trainable=False) if "bpe" in mode else None
+
+        bilstm = Bidirectional(GRU(hidden_dim, return_sequences=True, trainable=False), name='q_gru', trainable=False) if "ae" in mode else None
+        dense = Dense(latent_dim, activation="tanh", name="q_dense", trainable=False) if "ae" in mode else None
+
+        if self.mode == "bpe_ae":
+
+            query_sem = GlobalAveragePooling1D()(bpe_embed_layer(query))
+            pos_doc_sem = GlobalAveragePooling1D()(bpe_embed_layer(pos_doc))
+            neg_doc_sems = [GlobalAveragePooling1D()(bpe_embed_layer(neg_doc)) for neg_doc in neg_docs]
+
+            ae_query_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(query))))
+            ae_pos_doc_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(pos_doc))))
+            ae_neg_doc_sems = [dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(neg_doc)))) for neg_doc in neg_docs]
+
+            query_sem = merge([query_sem, ae_query_sem], mode='concat')
+            pos_doc_sem = merge([pos_doc_sem, ae_pos_doc_sem], mode='concat')
+            neg_doc_sems = [merge([i, j], mode="concat") for i, j in zip(neg_doc_sems, ae_neg_doc_sems)]
+
+        elif "bpe" in self.mode:
+
+            query_sem = GlobalAveragePooling1D()(bpe_embed_layer(query))
+            pos_doc_sem = GlobalAveragePooling1D()(bpe_embed_layer(pos_doc))
+            neg_doc_sems = [GlobalAveragePooling1D()(bpe_embed_layer(neg_doc)) for neg_doc in neg_docs] 
+
+        elif "ae" in self.mode:
+
+            query_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(query))))
+            pos_doc_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(pos_doc))))
+            neg_doc_sems = [dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(neg_doc)))) for neg_doc in neg_docs] 
+
 
         dense1 = Dense(hidden_dim, activation="tanh", name="q_dense1")
         dense2 = Dense(latent_dim, activation="tanh", name="q_dense2")
 
-
-
-
-        query_sem = dense2(dense1(query))
-        pos_doc_sem = dense2(dense1(pos_doc))
-        neg_doc_sems = [dense2(dense1(neg_doc)) for neg_doc in neg_docs] 
+        query_sem = dense2(dense1(query_sem))
+        pos_doc_sem = dense2(dense1(pos_doc_sem))
+        neg_doc_sems = [dense2(dense1(neg_doc)) for neg_doc in neg_doc_sems] 
 
         R_Q_D_p = dot([query_sem, pos_doc_sem], axes = 1, normalize = True) # See equation (4).
         R_Q_D_ns = [dot([query_sem, neg_doc_sem], axes = 1, normalize = True) for neg_doc_sem in neg_doc_sems] # See equation (4).
@@ -1067,7 +1106,9 @@ class DSSMClassifier():
         # self.model.summary()
 
     def name(self):
-        return "clf_%d" % self. hidden_dim 
+        # return "clf_%s" % self.mode 
+        return "clf_kate_bow"
+
 
 
 class AAE():
