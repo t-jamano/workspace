@@ -169,30 +169,31 @@ if __name__ == '__main__':
 		elif model == "dssm_max":
 			run = DSSM(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=False, enableSeparate=enableSeparate)
 
-		if pre:
-			# AAE
-			pre_model = load_model("/work/data/models/aae_1M_QD_ml15_2018_08_20_21:32:12_m2_h200_l100_k2_n1_ml15_w50512_b256_e1_a0.5_<keras.optimizers.Adam object at 0x7fb673b38d68>_50K_BPE.encoder.h5")
-			# pre_model = load_model("/work/data/models/aae_1M_QQ_ml15_2018_08_20_18:41:52_m1_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7f0de3567ef0>_50K_BPE.encoder.h5")
-			for layer in ["q_embedding_layer", "q_gru"]:
-			# for layer in ["q_embedding_layer"]:
-				run.model.get_layer(layer).set_weights(pre_model.get_layer(layer).get_weights())
-
-			# pre_model = load_model("/work/data/models/vae_100K_QD_ml15_2018_08_20_22:25:10_d_m3_h200_l100_k2_n1_ml15_w50512_b64_e1_a0.5_<keras.optimizers.Adam object at 0x7f744c847b00>_50K_BPE.encoder.h5")
-			# for layer, layer2 in zip(["d_embedding_layer", "d_gru"], ["q_embedding_layer", "q_gru"]):
-			# 	run.model.get_layer(layer).set_weights(pre_model.get_layer(layer2).get_weights())
-
 	elif model == "dssm_bpe":
 		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe")
-
-	elif model == "dssm_ae":
-		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae")
-		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
-		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5", custom_objects={"KCompetitive": KCompetitive})
+	elif model == "dssm_pre_bpe":
+		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe", trainable=True)
+		
+	elif model in ["dssm_ae", "dssm_pre_ae"]:
+		if "pre" in model:
+			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae", trainable=True)
+		else:
+			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae")
+		pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5", custom_objects={"KCompetitive": KCompetitive})
+		# pre_ae = load_model("/work/data/logs/new/all/vae_bow_m1_200M_QQ_ml15_limit1_2018_09_02_02:00:57.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/wae_m1_200M_QQ_ml15_limit1_2018_09_01_02:22:09.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/vae_kl_m1_200M_QQ_ml15_limit1_2018_09_01_02:31:47.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/all/aae_m1_200M_QQ_ml15_limit1_2018_09_02_21:12:21.last.encoder.h5")
+		# pre_ae =load_model("/work/data/logs/new/all/wae_m1_200M_QQ_ml15_limit1_2018_09_02_21:11:59.last.encoder.h5")
 		for layer in ["q_embedding", "q_gru", "q_dense"]:
 				run.model.get_layer(layer).set_weights(pre_ae.get_layer(layer).get_weights())
 
-	elif model == "dssm_bpe_ae":
-		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe_ae")
+	elif model in  ["dssm_bpe_ae", "dssm_pre_bpe_ae"]:
+		if "pre" in model:
+			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe_ae", trainable=True)
+		else:
+			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe_ae")
 		# pre_ae = load_model("/work/data/logs/new/vae_kl_m1_200M_QQ_ml15_limit1_2018_09_01_02:31:47.encoder.h5")
 		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
 		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5")
@@ -200,7 +201,7 @@ if __name__ == '__main__':
 				run.model.get_layer(layer).set_weights(pre_ae.get_layer(layer).get_weights())
 
 
-				
+
 
 	elif model == "binary":
 		run = BinaryClassifier(hidden_dim, latent_dim, nb_words, max_len, embedding_matrix, optimizer=optimizer, enableLSTM=True)
@@ -455,7 +456,7 @@ if __name__ == '__main__':
 			x_train = [q_enc_inputs, run.word_dropout(d_dec_inputs, bpe_dict['<drop>'])]
 			y_train = np.expand_dims(d_dec_outputs, axis=-1)
 
-		elif model in ["dssm", "dssm_aae", "dssm_bpe", "dssm_bpe_ae", "dssm_ae"]:
+		elif model in ["dssm", "dssm_aae", "dssm_bpe", "dssm_bpe_ae", "dssm_ae", "dssm_pre_bpe", "dssm_pre_ae", "dssm_pre_bpe_ae"]:
 
 			x_train = [q_enc_inputs, d_enc_inputs, d_enc_inputs[idx]]
 			y_train = np.zeros((train_num, 2))
@@ -503,6 +504,10 @@ if __name__ == '__main__':
 				if max_july < july_auc:
 					max_july = july_auc
 					run.encoder.save('/work/data/logs/new/all/%s.encoder.h5' % (model_name), overwrite=True)
+
+				# save last model
+				run.encoder.save('/work/data/logs/new/all/%s.last.encoder.h5' % (model_name), overwrite=True)
+
 
 				t1 = time()
 
