@@ -173,14 +173,14 @@ if __name__ == '__main__':
 		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe")
 	elif model == "dssm_pre_bpe":
 		run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe", trainable=True)
-		
+
 	elif model in ["dssm_ae", "dssm_pre_ae"]:
 		if "pre" in model:
 			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae", trainable=True)
 		else:
 			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="ae")
-		pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
-		# pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5", custom_objects={"KCompetitive": KCompetitive})
+		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
+		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5", custom_objects={"KCompetitive": KCompetitive})
 		# pre_ae = load_model("/work/data/logs/new/all/vae_bow_m1_200M_QQ_ml15_limit1_2018_09_02_02:00:57.encoder.h5")
 		# pre_ae = load_model("/work/data/logs/new/wae_m1_200M_QQ_ml15_limit1_2018_09_01_02:22:09.encoder.h5")
 		# pre_ae = load_model("/work/data/logs/new/vae_kl_m1_200M_QQ_ml15_limit1_2018_09_01_02:31:47.encoder.h5")
@@ -195,8 +195,8 @@ if __name__ == '__main__':
 		else:
 			run = DSSMClassifier(hidden_dim, latent_dim, num_negatives, nb_words, max_len, embedding_matrix, optimizer=optimizer, mode="bpe_ae")
 		# pre_ae = load_model("/work/data/logs/new/vae_kl_m1_200M_QQ_ml15_limit1_2018_09_01_02:31:47.encoder.h5")
-		# pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
-		pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5")
+		pre_ae = load_model("/work/data/logs/new/aae_m1_200M_QQ_ml15_limit1_2018_09_01_02:08:34.encoder.h5")
+		# pre_ae = load_model("/work/data/logs/new/all/kate_bow_m1_200M_QQ_ml15_limit1_2018_09_02_03:10:46.encoder.h5")
 		for layer in ["q_embedding", "q_gru", "q_dense"]:
 				run.model.get_layer(layer).set_weights(pre_ae.get_layer(layer).get_weights())
 

@@ -1055,6 +1055,8 @@ class DSSMClassifier():
         dense = Dense(latent_dim, activation="tanh", name="q_dense", trainable=self.trainable) if "ae" in mode else None
         bpe_dense = Dense(latent_dim, activation="tanh", trainable=self.trainable)
 
+
+
         if self.mode == "bpe_ae" and not self.trainable:
 
             query_sem = GlobalAveragePooling1D()(bpe_embed_layer(query))
@@ -1090,7 +1092,13 @@ class DSSMClassifier():
             pos_doc_sem = GlobalAveragePooling1D()(bpe_embed_layer(pos_doc))
             neg_doc_sems = [GlobalAveragePooling1D()(bpe_embed_layer(neg_doc)) for neg_doc in neg_docs] 
 
-        elif "ae" in self.mode or ("bpe" in self.mode and self.trainable):
+        elif "bpe" in self.mode and self.trainable:
+
+            query_sem = bpe_dense(GlobalMaxPooling1D()(bpe_bilstm(bpe_embed_layer(query))))
+            pos_doc_sem = bpe_dense(GlobalMaxPooling1D()(bpe_bilstm(bpe_embed_layer(pos_doc))))
+            neg_doc_sems = [bpe_dense(GlobalMaxPooling1D()(bpe_bilstm(bpe_embed_layer(neg_doc)))) for neg_doc in neg_docs] 
+
+        elif "ae" in self.mode:
 
             query_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(query))))
             pos_doc_sem = dense(GlobalMaxPooling1D()(bilstm(ae_embed_layer(pos_doc))))
@@ -1130,7 +1138,7 @@ class DSSMClassifier():
         if not self.trainable:
             return "clf_%s" % self.mode
         else:
-            return "clf_pre_bpe"
+            return "clf_pre_kate_bow"
 
 
 
