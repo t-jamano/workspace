@@ -1138,7 +1138,7 @@ class DSSMClassifier():
         if not self.trainable:
             return "clf_%s" % self.mode
         else:
-            return "clf_pre_kate_bow"
+            return "clf_pre_bpe_aae"
 
 
 
