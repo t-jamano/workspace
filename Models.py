@@ -1136,7 +1136,9 @@ class DSSMClassifier():
     def name(self):
         # return "clf_%s" % self.mode 
         if not self.trainable:
-            return "clf_%s" % self.mode
+            # return "clf_%s" % self.mode
+            return "clf_vae"
+
         else:
             return "clf_pre_bpe_aae"
 
